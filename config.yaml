@@ -1,0 +1,17 @@
+cameras:
+  - id: front-door
+    name: Front Door
+    device_index: 0
+    width: 854
+    height: 480
+    fps: 12
+    jpeg_quality: 70
+
+  # Uncomment and adjust device_index when adding more cameras
+  # - id: backyard
+  #   name: Backyard
+  #   device_index: 1
+  #   width: 854
+  #   height: 480
+  #   fps: 12
+  #   jpeg_quality: 70

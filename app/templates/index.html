@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Personal CCTV</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top-bar">
+    <h1>Personal CCTV</h1>
+    <a class="logout" href="/logout">Log out</a>
+  </header>
+
+  <main class="camera-grid">
+    {% for camera in cameras %}
+    <section class="camera-tile">
+      <div class="camera-header">
+        <h2>{{ camera.name }}</h2>
+        <span class="resolution">{{ camera.width }}x{{ camera.height }}</span>
+      </div>
+      <img
+        class="stream"
+        src="/stream/{{ camera.id }}"
+        alt="Live stream for {{ camera.name }}"
+      >
+    </section>
+    {% endfor %}
+  </main>
+</body>
+</html>
