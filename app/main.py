@@ -111,18 +111,45 @@ async def stream_camera(request: Request, camera_id: str, _: LoginRequired):
     )
 
 
-@app.get("/snapshot/{camera_id}")
-async def snapshot_camera(request: Request, camera_id: str, _: LoginRequired):
-    manager: CameraManager = request.app.state.camera_manager
-    camera = manager.get(camera_id)
-    if camera is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
+def _local_client(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    return host in {"127.0.0.1", "::1"}
 
+
+def _jpeg_or_503(camera) -> Response:
     jpeg = camera.get_latest_jpeg()
     if jpeg is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="No frame available yet",
         )
-
     return Response(content=jpeg, media_type="image/jpeg")
+
+
+@app.get("/snapshot/{camera_id}")
+async def snapshot_camera(request: Request, camera_id: str, _: LoginRequired):
+    manager: CameraManager = request.app.state.camera_manager
+    camera = manager.get(camera_id)
+    if camera is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
+    return _jpeg_or_503(camera)
+
+
+@app.get("/preview/{camera_id}")
+async def preview_camera(request: Request, camera_id: str):
+    """Unauthenticated JPEG for the local kiosk only."""
+    if not _local_client(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="local only")
+    manager: CameraManager = request.app.state.camera_manager
+    camera = manager.get(camera_id)
+    if camera is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
+    return _jpeg_or_503(camera)
+
+
+@app.get("/cameras")
+async def list_cameras_local(request: Request):
+    if not _local_client(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="local only")
+    manager: CameraManager = request.app.state.camera_manager
+    return [{"id": camera.id, "name": camera.name} for camera in manager.list_cameras()]

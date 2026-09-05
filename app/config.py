@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -14,6 +15,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 class CameraConfig(BaseModel):
     id: str
     name: str
+    backend: Literal["opencv", "picamera2"] = "opencv"
     device_index: int = 0
     width: int = 854
     height: int = 480
@@ -32,7 +34,7 @@ class Settings(BaseSettings):
     session_secret: str
     host: str = "127.0.0.1"
     port: int = 8000
-    config_path: Path = DEFAULT_CONFIG_PATH
+    config_path: Path = Field(default=DEFAULT_CONFIG_PATH)
 
 
 @lru_cache
