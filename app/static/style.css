@@ -84,14 +84,55 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 1rem;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
 
+.title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  min-width: 0;
+}
+
+.top-bar h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.host-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.host-chip {
+  font-size: 0.85rem;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.host-chip.is-charging {
+  color: var(--accent);
+}
+
+.host-chip.is-warn {
+  color: var(--error);
+  border-color: var(--error);
+}
+
 .logout {
   color: var(--accent);
   text-decoration: none;
+  flex-shrink: 0;
 }
 
 .camera-grid {

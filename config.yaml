@@ -1,3 +1,6 @@
+# Optional viewer title in the header (default: Personal CCTV)
+# app_name: Cyberdeck
+
 cameras:
   - id: front-door
     name: Front Door

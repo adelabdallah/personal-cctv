@@ -3,12 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Personal CCTV</title>
+  <title>{{ app_name }}</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header class="top-bar">
-    <h1>Personal CCTV</h1>
+    <div class="title-row">
+      <h1>{{ app_name }}</h1>
+      <div
+        class="host-status"
+        data-host-status
+        data-hot-c="{{ hot_c }}"
+        data-low-percent="{{ low_battery_percent }}"
+      >
+        <span
+          class="host-chip{% if host.temp_c is not none and host.temp_c >= hot_c %} is-warn{% endif %}"
+          data-role="temp"
+          {% if host.temp_c is none %}hidden{% endif %}
+        >{% if host.temp_c is not none %}{{ "%.1f"|format(host.temp_c) }}°C{% endif %}</span>
+        <span
+          class="host-chip{% if host.charging %} is-charging{% endif %}{% if host.battery_percent is not none and host.battery_percent <= low_battery_percent and not host.charging %} is-warn{% endif %}"
+          data-role="battery"
+          {% if host.battery_percent is none %}hidden{% endif %}
+          {% if host.charging %}title="Charging"{% endif %}
+        >{% if host.battery_percent is not none %}{{ host.battery_percent|round|int }}%{% endif %}</span>
+      </div>
+    </div>
     <a class="logout" href="/logout">Log out</a>
   </header>
 
@@ -27,5 +47,6 @@
     </section>
     {% endfor %}
   </main>
+  <script src="/static/host.js" defer></script>
 </body>
 </html>

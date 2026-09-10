@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+DEFAULT_APP_NAME = "Personal CCTV"
 
 
 class CameraConfig(BaseModel):
@@ -42,10 +43,26 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def load_camera_configs(config_path: Path | None = None) -> list[CameraConfig]:
+def _load_config_data(config_path: Path | None = None) -> dict:
     path = config_path or get_settings().config_path
     with path.open(encoding="utf-8") as config_file:
         data = yaml.safe_load(config_file) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid config in {path}")
+    return data
+
+
+def load_app_name(config_path: Path | None = None) -> str:
+    data = _load_config_data(config_path)
+    name = data.get("app_name", DEFAULT_APP_NAME)
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return DEFAULT_APP_NAME
+
+
+def load_camera_configs(config_path: Path | None = None) -> list[CameraConfig]:
+    path = config_path or get_settings().config_path
+    data = _load_config_data(path)
 
     cameras = data.get("cameras", [])
     if not cameras:

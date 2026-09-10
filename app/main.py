@@ -3,14 +3,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request, status
-from fastapi.responses import RedirectResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth import LoginRequired, login, logout, verify_password
 from app.camera import CameraManager
-from app.config import get_settings, load_camera_configs
+from app.config import get_settings, load_app_name, load_camera_configs
+from app.host import HOT_C, LOW_BATTERY_PERCENT, read_host_status
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,25 @@ async def index(request: Request):
         }
         for camera in manager.list_cameras()
     ]
-    return templates.TemplateResponse(request, "index.html", {"cameras": cameras})
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "app_name": load_app_name(),
+            "cameras": cameras,
+            "host": read_host_status(),
+            "hot_c": HOT_C,
+            "low_battery_percent": LOW_BATTERY_PERCENT,
+        },
+    )
+
+
+@app.get("/host")
+async def host_status(_: LoginRequired) -> JSONResponse:
+    return JSONResponse(
+        read_host_status().as_dict(),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/stream/{camera_id}")
