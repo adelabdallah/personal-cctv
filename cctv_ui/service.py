@@ -264,14 +264,18 @@ def _python() -> str:
     return sys.executable or shutil.which("python3") or "python3"
 
 
-def start_stream() -> str | None:
-    """Start uvicorn and a quick tunnel. Return an error string, or None."""
+def start_stream(*, restart: bool = False) -> str | None:
+    """Start uvicorn and a quick tunnel. Return an error string, or None.
+
+    When the server is already healthy, leave it running and refresh the public
+    link. ``restart`` stops that server first and brings a new one up.
+    """
     root = repo_root()
     if not (root / "app" / "main.py").is_file():
         return f"personal-cctv is not at {root}"
     settings = ensure_env()
     write_config()
-    if running_healthy():
+    if running_healthy() and not restart:
         _recover_public_url(settings)
         return None
     stop_stream()

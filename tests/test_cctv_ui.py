@@ -104,6 +104,11 @@ class MappingTest(unittest.TestCase):
     def test_home_buttons_cover_four_actions(self) -> None:
         buttons = home_buttons()
         self.assertEqual([button.action for button in buttons], ["start", "camera", "reboot", "shutdown"])
+        self.assertEqual(buttons[0].label, "Start Stream")
+        running = home_buttons(running=True)
+        self.assertEqual(running[0].label, "Restart Stream")
+        self.assertEqual(running[0].action, "start")
+        self.assertEqual(running[0].rect, buttons[0].rect)
         rects = [button.rect for button in buttons]
         for x, y, w, h in rects:
             self.assertGreater(w, 80)

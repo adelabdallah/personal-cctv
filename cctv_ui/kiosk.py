@@ -75,14 +75,14 @@ class UiState:
     rotate: int = PRESENT_ROTATE
 
 
-def home_buttons() -> tuple[Button, ...]:
+def home_buttons(running: bool = False) -> tuple[Button, ...]:
     top = HEADER_H + 4
     height = LOGICAL_H - top - STATUS_H - MARGIN
     width = LOGICAL_W - MARGIN * 2 - GAP
     tile_w = width // 2
     tile_h = (height - GAP) // 2
     labels = (
-        ("start", "Start Stream"),
+        ("start", "Restart Stream" if running else "Start Stream"),
         ("camera", "Camera"),
         ("reboot", "Reboot"),
         ("shutdown", "Shut down"),
@@ -258,10 +258,12 @@ def _fit(font, text: str, width: int) -> str:
     return trimmed + "..."
 
 
-def _draw_icon(pygame, canvas, action: str, rect: tuple[int, int, int, int]) -> None:
+def _draw_icon(pygame, canvas, action: str, rect: tuple[int, int, int, int], *, restart: bool = False) -> None:
     x, y, w, h = rect
     cx = x + w // 2
     cy = y + h // 2 - 12
+    if action == "start" and restart:
+        action = "reboot"
     if action == "start":
         pygame.draw.circle(canvas, ACCENT, (cx, cy), 16, 2)
         pygame.draw.polygon(
@@ -288,7 +290,13 @@ def _draw_button(pygame, canvas, font, button: Button) -> None:
     x, y, w, h = button.rect
     pygame.draw.rect(canvas, BTN_FACE, button.rect, border_radius=8)
     pygame.draw.rect(canvas, ACCENT, button.rect, 2, border_radius=8)
-    _draw_icon(pygame, canvas, button.action, button.rect)
+    _draw_icon(
+        pygame,
+        canvas,
+        button.action,
+        button.rect,
+        restart=button.label == "Restart Stream",
+    )
     label = font.render(button.label, True, FG)
     if button.action in {"yes", "no", "back"}:
         label_y = y + (h - label.get_height()) // 2
@@ -313,7 +321,7 @@ def _draw_home(pygame, canvas, title_font, label_font, small, state: UiState) ->
     title = title_font.render("CCTV", True, APP_NAME)
     canvas.blit(title, (MARGIN, 4))
     _draw_temp(canvas, small, state.temp_c)
-    for button in home_buttons():
+    for button in home_buttons(state.stream_up):
         _draw_button(pygame, canvas, label_font, button)
     bar = small.render(_fit(small, state.status, LOGICAL_W - MARGIN * 2), True, DIM)
     canvas.blit(bar, (MARGIN, LOGICAL_H - STATUS_H))
@@ -354,10 +362,12 @@ def _draw_confirm(pygame, canvas, title_font, label_font, small, state: UiState)
 
 
 def _refresh_status(state: UiState, now: float) -> None:
+    if state.starting:
+        return
     if now - state.status_at >= STATUS_PERIOD_S:
         state.status_at = now
         state.stream_up = is_running()
-    if state.starting or now < state.hold_until:
+    if now < state.hold_until:
         return
     if state.stream_up:
         state.status = status_line(True, public_url(), tunnel_error())
@@ -375,20 +385,21 @@ def _refresh_temp(state: UiState, now: float) -> None:
 def _begin_start(state: UiState, pump: FramePump) -> None:
     if state.starting:
         return
+    restarting = state.stream_up
     pump.stop()
     state.starting = True
     state.page = "home"
-    state.status = "starting stream"
+    state.status = "restarting stream" if restarting else "starting stream"
 
     def worker() -> None:
-        err = start_stream()
+        err = start_stream(restart=restarting)
+        state.stream_up = is_running()
         if err:
             state.status = err
             state.hold_until = time.monotonic() + 8
         else:
-            state.stream_up = True
             state.hold_until = 0.0
-            state.status = status_line(True, public_url(), tunnel_error())
+            state.status = status_line(state.stream_up, public_url(), tunnel_error())
         state.starting = False
 
     threading.Thread(target=worker, name="cctv-start", daemon=True).start()
@@ -455,7 +466,7 @@ def _active_buttons(state: UiState) -> tuple[Button, ...]:
         return confirm_buttons()
     if state.page == "camera":
         return (back_button(),)
-    return home_buttons()
+    return home_buttons(state.stream_up)
 
 
 def _on_key(state: UiState, pump: FramePump, key: int, pygame) -> None:
