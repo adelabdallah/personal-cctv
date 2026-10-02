@@ -9,10 +9,16 @@ import socket
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from cctv_ui.display import kmsdrm_device_index, logical_to_panel, panel_to_logical
+from cctv_ui.display import (
+    BACKLIGHT_BRIGHTNESS,
+    kmsdrm_device_index,
+    logical_to_panel,
+    panel_to_logical,
+    set_backlight,
+)
 from cctv_ui.preview import FramePump
 from cctv_ui.service import (
     format_link,
@@ -52,6 +58,7 @@ GAP = 8
 TEMP_PATH = Path("/sys/class/thermal/thermal_zone0/temp")
 TEMP_PERIOD_S = 2.0
 STATUS_PERIOD_S = 0.5
+BLANK_AFTER_S = 10 * 60
 
 
 @dataclass
@@ -73,6 +80,8 @@ class UiState:
     hold_until: float = 0.0
     stream_up: bool = False
     rotate: int = PRESENT_ROTATE
+    last_input: float = field(default_factory=time.monotonic)
+    blanked: bool = False
 
 
 def home_buttons(running: bool = False) -> tuple[Button, ...]:
@@ -375,6 +384,25 @@ def _refresh_status(state: UiState, now: float) -> None:
         state.status = "idle"
 
 
+def _mark_input(state: UiState, now: float, path: Path = BACKLIGHT_BRIGHTNESS) -> bool:
+    """Record activity. Return True when this input only wakes the backlight."""
+    state.last_input = now
+    if not state.blanked:
+        return False
+    if set_backlight(True, path):
+        state.blanked = False
+        log.info("backlight on")
+    return True
+
+
+def _maybe_blank(state: UiState, now: float, path: Path = BACKLIGHT_BRIGHTNESS) -> None:
+    if state.blanked or now - state.last_input < BLANK_AFTER_S:
+        return
+    if set_backlight(False, path):
+        state.blanked = True
+        log.info("backlight off")
+
+
 def _refresh_temp(state: UiState, now: float) -> None:
     if now - state.temp_at < TEMP_PERIOD_S:
         return
@@ -569,9 +597,16 @@ def run() -> int:
                 and state.page == "home"
             ):
                 state.status = "touch bus is off"
+            swallow = False
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return 0
+                if event.type in {pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN}:
+                    if _mark_input(state, now) or swallow:
+                        swallow = True
+                        continue
+                if swallow:
+                    continue
                 if event.type == pygame.KEYDOWN:
                     _on_key(state, pump, event.key, pygame)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -590,12 +625,13 @@ def run() -> int:
                     if action:
                         _activate(state, pump, action)
             point = touch.poll()
-            if point is not None:
+            if point is not None and not (_mark_input(state, now) or swallow):
                 lx, ly = panel_to_logical(point[0], point[1], rotate)
                 log.info("touch panel=%s logical=%s", point, (lx, ly))
                 action = hit_button(_active_buttons(state), lx, ly)
                 if action:
                     _activate(state, pump, action)
+            _maybe_blank(state, now)
             if state.page == "camera":
                 pump.sync(state.stream_up)
                 jpeg = pump.jpeg()
@@ -611,6 +647,7 @@ def run() -> int:
             _present(pygame, screen, canvas, rotate)
             clock.tick(20)
     finally:
+        set_backlight(True)
         pump.stop()
         server.close()
         touch.close()

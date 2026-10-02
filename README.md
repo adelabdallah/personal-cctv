@@ -162,7 +162,7 @@ On the Pi, the touchscreen UI starts on tty1 at boot. The same actions are avail
 | `cctv shutdown` | Shut the Pi down |
 | `cctv link` | Print the public stream URL |
 
-The viewer password is `pass123`. On the panel, keys `1` to `4` match the four tiles, and Esc goes back.
+The viewer password is `pass123`. On the panel, keys `1` to `4` match the four tiles, and Esc goes back. The backlight turns off after 10 minutes without a touch or key. The next touch or key turns it back on and does not activate a tile.
 
 Install on the Pi from a checkout of this repo. sudo will ask for a password.
 

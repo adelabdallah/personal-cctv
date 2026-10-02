@@ -10,8 +10,8 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from cctv_ui.cli import main
-from cctv_ui.display import kmsdrm_device_index, logical_to_panel, panel_to_logical
-from cctv_ui.kiosk import UiServer, home_buttons, read_cpu_temp_c
+from cctv_ui.display import kmsdrm_device_index, logical_to_panel, panel_to_logical, set_backlight
+from cctv_ui.kiosk import BLANK_AFTER_S, UiServer, UiState, _mark_input, _maybe_blank, home_buttons, read_cpu_temp_c
 from cctv_ui.service import (
     ensure_env,
     env_file,
@@ -161,6 +161,25 @@ class MappingTest(unittest.TestCase):
         for index, rect in enumerate(rects):
             for other in rects[index + 1 :]:
                 self.assertFalse(_overlaps(rect, other))
+
+    def test_backlight_blanks_after_ten_minutes_and_wakes(self) -> None:
+        self.assertEqual(BLANK_AFTER_S, 600)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "brightness"
+            path.write_text("1\n", encoding="utf-8")
+            state = UiState(last_input=0.0)
+            _maybe_blank(state, 599, path)
+            self.assertFalse(state.blanked)
+            self.assertEqual(path.read_text(encoding="utf-8"), "1\n")
+            _maybe_blank(state, 600, path)
+            self.assertTrue(state.blanked)
+            self.assertEqual(path.read_text(encoding="utf-8"), "0\n")
+            self.assertTrue(_mark_input(state, 601, path))
+            self.assertFalse(state.blanked)
+            self.assertEqual(path.read_text(encoding="utf-8"), "1\n")
+            self.assertFalse(_mark_input(state, 602, path))
+            missing = Path(tmp) / "missing" / "brightness"
+            self.assertFalse(set_backlight(False, missing))
 
     def test_cpu_temp_millidegrees(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
