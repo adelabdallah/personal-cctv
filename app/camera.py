@@ -146,9 +146,12 @@ class Camera:
     def _open_picamera2(self) -> None:
         from picamera2 import Picamera2
 
+        from libcamera import Transform
+
         cam = Picamera2()
         cfg = cam.create_preview_configuration(
-            main={"size": (self.config.width, self.config.height), "format": "RGB888"}
+            main={"size": (self.config.width, self.config.height), "format": "RGB888"},
+            transform=Transform(hflip=1, vflip=1),
         )
         cam.configure(cfg)
         cam.start()

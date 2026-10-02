@@ -150,6 +150,28 @@ Restart `./run.sh` and re-test over the tunnel. Lower fps/quality if bandwidth i
 
 
 
+## Raspberry Pi panel
+
+On the Pi, the touchscreen UI starts on tty1 at boot. The same actions are available over SSH.
+
+| Command | What it does |
+| --- | --- |
+| `cctv start` | Start the camera server and a Cloudflare quick tunnel |
+| `cctv camera` | Show the camera on the panel |
+| `cctv reboot` | Restart the Pi |
+| `cctv shutdown` | Shut the Pi down |
+| `cctv link` | Print the public stream URL |
+
+The viewer password is `pass123`. On the panel, keys `1` to `4` match the four tiles, and Esc goes back.
+
+Install on the Pi from a checkout of this repo. sudo will ask for a password.
+
+```bash
+./scripts/install-pi.sh
+```
+
+The touch controller needs I2C. The installer enables it and will tell you if a reboot is required. If the panel UI will not quit, run `touch ~/.local/share/cctv/skip-ui` from SSH. The UI exits and tty1 drops to a shell.
+
 ## Future roadmap
 
 - Recording with automatic deletion after N days
