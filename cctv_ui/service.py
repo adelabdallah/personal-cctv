@@ -22,7 +22,9 @@ DEFAULT_PORT = 8000
 CAMERA_ID = "camera"
 START_WAIT_S = 25.0
 TUNNEL_WAIT_S = 20.0
-TUNNEL_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+# Quick Tunnel names are several hyphenated words. api.trycloudflare.com is the
+# create-tunnel endpoint and shows up in failure lines before the real hostname.
+TUNNEL_URL_RE = re.compile(r"https://[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com")
 PowerAction = Literal["reboot", "poweroff"]
 
 
@@ -69,18 +71,25 @@ def skip_path() -> Path:
 
 
 def parse_tunnel_url(text: str) -> str | None:
-    match = TUNNEL_URL_RE.search(text)
-    return match.group(0) if match else None
+    found = TUNNEL_URL_RE.findall(text)
+    return found[-1] if found else None
+
+
+def _saved_url() -> str:
+    try:
+        return url_file().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def public_url() -> str | None:
-    try:
-        text = url_file().read_text(encoding="utf-8").strip()
-    except OSError:
-        text = ""
-    if text:
-        return text
-    return _harvest_url()
+    harvested = _harvest_url()
+    if harvested:
+        return harvested
+    saved = _saved_url()
+    if saved and parse_tunnel_url(saved):
+        return saved
+    return None
 
 
 def viewer_password() -> str:
@@ -402,7 +411,7 @@ def _harvest_url() -> str | None:
     except OSError:
         return None
     url = parse_tunnel_url(chunk)
-    if url:
+    if url and url != _saved_url():
         _write_url(url)
     return url
 

@@ -16,6 +16,7 @@ from cctv_ui.service import (
     ensure_env,
     env_file,
     format_link,
+    log_file,
     meta_file,
     parse_tunnel_url,
     ui_command,
@@ -63,6 +64,39 @@ class StateDirTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("pass123", buf.getvalue())
 
+    def test_link_replaces_api_host_when_tunnel_url_appears(self) -> None:
+        log_file().write_text(
+            'failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel"\n'
+            "Visit it at https://picks-antenna-dare-athletics.trycloudflare.com\n",
+            encoding="utf-8",
+        )
+        meta_file().write_text(
+            json.dumps({"app_pid": os.getpid(), "tunnel_log_offset": 0}) + "\n",
+            encoding="utf-8",
+        )
+        url_file().write_text("https://api.trycloudflare.com\n", encoding="utf-8")
+        text = format_link()
+        self.assertIn("https://picks-antenna-dare-athletics.trycloudflare.com", text)
+        self.assertNotIn("api.trycloudflare.com", text)
+        self.assertEqual(
+            url_file().read_text(encoding="utf-8").strip(),
+            "https://picks-antenna-dare-athletics.trycloudflare.com",
+        )
+
+    def test_link_waits_when_only_the_api_host_is_logged(self) -> None:
+        log_file().write_text(
+            'Post "https://api.trycloudflare.com/tunnel": server misbehaving\n',
+            encoding="utf-8",
+        )
+        meta_file().write_text(
+            json.dumps({"app_pid": os.getpid(), "tunnel_log_offset": 0}) + "\n",
+            encoding="utf-8",
+        )
+        url_file().write_text("https://api.trycloudflare.com\n", encoding="utf-8")
+        text = format_link()
+        self.assertIn("still coming up", text)
+        self.assertNotIn("api.trycloudflare.com", text)
+
     def test_password_stays_fixed_and_secret_is_kept(self) -> None:
         first = ensure_env()
         second = ensure_env()
@@ -85,6 +119,13 @@ class MappingTest(unittest.TestCase):
         text = "connect https://region1.v2.argotunnel.com then https://abc-def.trycloudflare.com"
         self.assertEqual(parse_tunnel_url(text), "https://abc-def.trycloudflare.com")
         self.assertIsNone(parse_tunnel_url("https://region1.v2.argotunnel.com"))
+        self.assertIsNone(parse_tunnel_url('Post "https://api.trycloudflare.com/tunnel"'))
+        later = (
+            'Post "https://api.trycloudflare.com/tunnel"\n'
+            "https://one-two-three.trycloudflare.com\n"
+            "https://four-five-six.trycloudflare.com\n"
+        )
+        self.assertEqual(parse_tunnel_url(later), "https://four-five-six.trycloudflare.com")
 
     def test_panel_mapping_roundtrip(self) -> None:
         for rotate in (90, 270, 0):
