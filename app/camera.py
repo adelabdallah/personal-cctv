@@ -11,6 +11,29 @@ from app.config import CameraConfig
 logger = logging.getLogger(__name__)
 
 
+def start_picamera2(size: tuple[int, int]):
+    """Open the Pi camera module upright, with the room exposed against a bright window."""
+    from libcamera import controls
+    from picamera2 import Picamera2
+
+    cam = Picamera2()
+    config = cam.create_preview_configuration(
+        main={"size": size, "format": "RGB888"},
+    )
+    cam.configure(config)
+    cam.set_controls(
+        {
+            "AeEnable": True,
+            "AwbEnable": True,
+            "AwbMode": controls.AwbModeEnum.Auto,
+            "AeConstraintMode": controls.AeConstraintModeEnum.Shadows,
+            "ExposureValue": 0.0,
+        }
+    )
+    cam.start()
+    return cam
+
+
 def encode_jpeg(frame, quality: int) -> bytes | None:
     try:
         import cv2
@@ -144,18 +167,7 @@ class Camera:
         )
 
     def _open_picamera2(self) -> None:
-        from picamera2 import Picamera2
-
-        from libcamera import Transform
-
-        cam = Picamera2()
-        cfg = cam.create_preview_configuration(
-            main={"size": (self.config.width, self.config.height), "format": "RGB888"},
-            transform=Transform(hflip=1, vflip=1),
-        )
-        cam.configure(cfg)
-        cam.start()
-        self._picam = cam
+        self._picam = start_picamera2((self.config.width, self.config.height))
         self.actual_width = self.config.width
         self.actual_height = self.config.height
         self.actual_fps = float(self.config.fps)

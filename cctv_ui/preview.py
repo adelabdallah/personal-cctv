@@ -75,19 +75,13 @@ class FramePump:
 
     def _local_loop(self) -> None:
         try:
-            from libcamera import Transform
-            from picamera2 import Picamera2
+            from app.camera import start_picamera2
         except ImportError:
             self.error = "picamera2 is not installed"
             return
-        cam = Picamera2()
+        cam = None
         try:
-            cfg = cam.create_video_configuration(
-                main={"size": (640, 480), "format": "RGB888"},
-                transform=Transform(hflip=1, vflip=1),
-            )
-            cam.configure(cfg)
-            cam.start()
+            cam = start_picamera2((640, 480))
             while not self._stop.is_set():
                 buf = io.BytesIO()
                 cam.capture_file(buf, format="jpeg")
@@ -98,11 +92,12 @@ class FramePump:
             log.exception("local camera failed")
             self.error = str(exc)
         finally:
-            try:
-                cam.stop()
-            except Exception:
-                log.debug("picamera2 stop failed", exc_info=True)
-            try:
-                cam.close()
-            except Exception:
-                log.debug("picamera2 close failed", exc_info=True)
+            if cam is not None:
+                try:
+                    cam.stop()
+                except Exception:
+                    log.debug("picamera2 stop failed", exc_info=True)
+                try:
+                    cam.close()
+                except Exception:
+                    log.debug("picamera2 close failed", exc_info=True)
