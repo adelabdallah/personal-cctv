@@ -12,13 +12,17 @@ logger = logging.getLogger(__name__)
 
 
 def start_picamera2(size: tuple[int, int]):
-    """Open the Pi camera module upright, with the room exposed against a bright window."""
-    from libcamera import controls
+    """Open the Pi camera module upright, with the room exposed against a bright window.
+
+    The module is mounted upside down, so the image is rotated 180 degrees.
+    """
+    from libcamera import Transform, controls
     from picamera2 import Picamera2
 
     cam = Picamera2()
     config = cam.create_preview_configuration(
         main={"size": size, "format": "RGB888"},
+        transform=Transform(hflip=1, vflip=1),
     )
     cam.configure(config)
     cam.set_controls(
