@@ -62,6 +62,11 @@ def log_file() -> Path:
     return state_dir() / "cctv.log"
 
 
+def tunnel_log_file() -> Path:
+    """Log for the current cloudflared only. Truncated each time a tunnel starts."""
+    return state_dir() / "tunnel.log"
+
+
 def ui_socket_path() -> Path:
     return state_dir() / "ui.sock"
 
@@ -83,13 +88,30 @@ def _saved_url() -> str:
 
 
 def public_url() -> str | None:
+    """Return the hostname of the cloudflared that is running now.
+
+    A saved name from a tunnel that has already exited is dropped. A name is
+    pinned to the current process the first time that process logs one, so a
+    later line in a shared log cannot replace it.
+    """
+    meta = _read_meta()
+    if not _pid_alive(meta.get("tunnel_pid")):
+        if meta.get("url") or _saved_url():
+            _forget_public_url()
+        return None
+    pinned = meta.get("url")
+    if isinstance(pinned, str) and parse_tunnel_url(pinned):
+        if pinned != _saved_url():
+            url_file().write_text(pinned + "\n", encoding="utf-8")
+        return pinned
     harvested = _harvest_url()
-    if harvested:
-        return harvested
-    saved = _saved_url()
-    if saved and parse_tunnel_url(saved):
-        return saved
-    return None
+    if not harvested:
+        return None
+    meta = _read_meta()
+    meta["url"] = harvested
+    _write_meta(meta)
+    url_file().write_text(harvested + "\n", encoding="utf-8")
+    return harvested
 
 
 def viewer_password() -> str:
@@ -108,11 +130,14 @@ def _write_meta(data: dict) -> None:
     meta_file().write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def _write_url(url: str) -> None:
-    url_file().write_text(url + "\n", encoding="utf-8")
+def _forget_public_url() -> None:
     meta = _read_meta()
-    meta["url"] = url
+    meta.pop("url", None)
     _write_meta(meta)
+    try:
+        url_file().unlink()
+    except OSError:
+        pass
 
 
 def _env_value(key: str) -> str | None:
@@ -248,8 +273,11 @@ def stop_stream() -> None:
         pid = meta.get(key)
         if isinstance(pid, int):
             _kill_tree(pid)
+    for stray in _our_cloudflared_pids():
+        _kill_tree(stray)
     meta["app_pid"] = None
     meta["tunnel_pid"] = None
+    meta.pop("url", None)
     _write_meta(meta)
     try:
         url_file().unlink()
@@ -347,7 +375,10 @@ def _stop_tunnel() -> None:
     pid = meta.get("tunnel_pid")
     if isinstance(pid, int):
         _kill_tree(pid)
+    for stray in _our_cloudflared_pids():
+        _kill_tree(stray)
     meta["tunnel_pid"] = None
+    meta.pop("url", None)
     _write_meta(meta)
     try:
         url_file().unlink()
@@ -365,13 +396,36 @@ def _cloudflared() -> str | None:
     return None
 
 
+def _our_cloudflared_pids() -> list[int]:
+    """cloudflared processes this app started. Empty where /proc is unavailable."""
+    root = Path("/proc")
+    if not root.is_dir():
+        return []
+    found: list[int] = []
+    for entry in root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        command = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        if "cloudflared" in command and "--url" in command and "127.0.0.1" in command:
+            found.append(int(entry.name))
+    return found
+
+
 def _start_tunnel(port: str, env: dict[str, str], log) -> str | None:
+    del log
     cloudflared = _cloudflared()
     if cloudflared is None:
         return "cloudflared is not installed"
+    _stop_tunnel()
     try:
-        log.flush()
-        offset = log.tell()
+        handle = tunnel_log_file().open("wb")
+    except OSError as exc:
+        return f"cloudflared failed ({exc})"
+    try:
         proc = subprocess.Popen(
             [
                 cloudflared,
@@ -381,39 +435,39 @@ def _start_tunnel(port: str, env: dict[str, str], log) -> str | None:
                 "--no-autoupdate",
             ],
             env=env,
-            stdout=log,
+            stdout=handle,
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
     except OSError as exc:
+        handle.close()
         return f"cloudflared failed ({exc})"
+    handle.close()
     meta = _read_meta()
     meta["tunnel_pid"] = proc.pid
-    meta["tunnel_log_offset"] = offset
+    meta["tunnel_log_offset"] = 0
+    meta.pop("url", None)
     meta.pop("tunnel_error", None)
     _write_meta(meta)
     return None
 
 
 def _harvest_url() -> str | None:
+    """First quick-tunnel hostname in the current tunnel log."""
     raw_offset = _read_meta().get("tunnel_log_offset")
-    if raw_offset is None:
-        return None
     try:
-        offset = int(raw_offset)
+        offset = int(raw_offset or 0)
     except (TypeError, ValueError):
-        return None
+        offset = 0
     try:
-        with log_file().open("rb") as handle:
+        with tunnel_log_file().open("rb") as handle:
             if offset:
                 handle.seek(offset)
             chunk = handle.read().decode("utf-8", errors="replace")
     except OSError:
         return None
-    url = parse_tunnel_url(chunk)
-    if url and url != _saved_url():
-        _write_url(url)
-    return url
+    found = TUNNEL_URL_RE.findall(chunk)
+    return found[0] if found else None
 
 
 def _wait_public_url(timeout: float = TUNNEL_WAIT_S) -> str | None:
@@ -434,13 +488,19 @@ def format_link() -> str:
     error = tunnel_error()
     if error and not url:
         return f"{error}\nviewer password: {password}\n"
-    if not url:
+    if url:
+        return f"{url}\nviewer password: {password}\n"
+    if not _pid_alive(_read_meta().get("tunnel_pid")):
         return (
-            "cctv is up locally. the public link is still coming up.\n"
-            "wait a few seconds and run: cctv link\n"
+            "cctv is up locally. the public tunnel is not running.\n"
+            "run: cctv start\n"
             f"viewer password: {password}\n"
         )
-    return f"{url}\nviewer password: {password}\n"
+    return (
+        "cctv is up locally. the public link is still coming up.\n"
+        "wait a few seconds and run: cctv link\n"
+        f"viewer password: {password}\n"
+    )
 
 
 def format_start() -> tuple[int, str]:

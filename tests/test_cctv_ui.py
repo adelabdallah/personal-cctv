@@ -16,9 +16,9 @@ from cctv_ui.service import (
     ensure_env,
     env_file,
     format_link,
-    log_file,
     meta_file,
     parse_tunnel_url,
+    tunnel_log_file,
     ui_command,
     url_file,
     viewer_password,
@@ -50,10 +50,17 @@ class StateDirTest(unittest.TestCase):
 
     def test_link_prints_password_and_url(self) -> None:
         meta_file().write_text(
-            json.dumps({"app_pid": os.getpid(), "port": "8000"}) + "\n",
+            json.dumps(
+                {
+                    "app_pid": os.getpid(),
+                    "tunnel_pid": os.getpid(),
+                    "port": "8000",
+                    "url": "https://yard-cam.trycloudflare.com",
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
-        url_file().write_text("https://yard-cam.trycloudflare.com\n", encoding="utf-8")
         text = format_link()
         self.assertIn("https://yard-cam.trycloudflare.com", text)
         self.assertIn(viewer_password(), text)
@@ -64,14 +71,53 @@ class StateDirTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("pass123", buf.getvalue())
 
+    def test_link_drops_a_url_whose_tunnel_has_exited(self) -> None:
+        meta_file().write_text(
+            json.dumps(
+                {
+                    "app_pid": os.getpid(),
+                    "tunnel_pid": 2**30,
+                    "url": "https://old-dead-tunnel.trycloudflare.com",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        url_file().write_text("https://old-dead-tunnel.trycloudflare.com\n", encoding="utf-8")
+        text = format_link()
+        self.assertNotIn("old-dead-tunnel", text)
+        self.assertIn("public tunnel is not running", text)
+        self.assertFalse(url_file().exists())
+
+    def test_link_keeps_the_live_tunnel_name_when_the_log_grows(self) -> None:
+        tunnel_log_file().write_text(
+            "https://live-tunnel-name.trycloudflare.com\n"
+            "https://later-dead-name.trycloudflare.com\n",
+            encoding="utf-8",
+        )
+        meta_file().write_text(
+            json.dumps(
+                {
+                    "app_pid": os.getpid(),
+                    "tunnel_pid": os.getpid(),
+                    "url": "https://live-tunnel-name.trycloudflare.com",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        text = format_link()
+        self.assertIn("https://live-tunnel-name.trycloudflare.com", text)
+        self.assertNotIn("later-dead-name", text)
+
     def test_link_replaces_api_host_when_tunnel_url_appears(self) -> None:
-        log_file().write_text(
+        tunnel_log_file().write_text(
             'failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel"\n'
             "Visit it at https://picks-antenna-dare-athletics.trycloudflare.com\n",
             encoding="utf-8",
         )
         meta_file().write_text(
-            json.dumps({"app_pid": os.getpid(), "tunnel_log_offset": 0}) + "\n",
+            json.dumps({"app_pid": os.getpid(), "tunnel_pid": os.getpid(), "tunnel_log_offset": 0}) + "\n",
             encoding="utf-8",
         )
         url_file().write_text("https://api.trycloudflare.com\n", encoding="utf-8")
@@ -84,12 +130,12 @@ class StateDirTest(unittest.TestCase):
         )
 
     def test_link_waits_when_only_the_api_host_is_logged(self) -> None:
-        log_file().write_text(
+        tunnel_log_file().write_text(
             'Post "https://api.trycloudflare.com/tunnel": server misbehaving\n',
             encoding="utf-8",
         )
         meta_file().write_text(
-            json.dumps({"app_pid": os.getpid(), "tunnel_log_offset": 0}) + "\n",
+            json.dumps({"app_pid": os.getpid(), "tunnel_pid": os.getpid(), "tunnel_log_offset": 0}) + "\n",
             encoding="utf-8",
         )
         url_file().write_text("https://api.trycloudflare.com\n", encoding="utf-8")
