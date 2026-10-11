@@ -1,0 +1,9 @@
+[Unit]
+Description=Check the CCTV network and stream
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@USER@
+Environment=HOME=@HOME@
+ExecStart=/usr/local/bin/cctv supervise

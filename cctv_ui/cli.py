@@ -1,4 +1,4 @@
-"""cctv start, camera, reboot, shutdown, link, and ui."""
+"""cctv start, camera, reboot, shutdown, link, ui, boot, and supervise."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("shutdown", help="shut down the Pi")
     sub.add_parser("link", help="print the public stream link and password")
     sub.add_parser("ui", help="run the touchscreen UI")
+    sub.add_parser("boot", help="after boot, wait for a route and start the stream")
+    sub.add_parser("supervise", help="repair or reboot if the network or stream stays down")
     args = parser.parse_args(argv)
     handlers = {
         "start": cmd_start,
@@ -26,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
         "shutdown": cmd_shutdown,
         "link": cmd_link,
         "ui": cmd_ui,
+        "boot": cmd_boot,
+        "supervise": cmd_supervise,
     }
     return handlers[args.command]()
 
@@ -65,6 +69,20 @@ def cmd_ui() -> int:
     from cctv_ui.kiosk import run
 
     return run()
+
+
+def cmd_boot() -> int:
+    from cctv_ui.supervisor import wait_for_route
+
+    wait_for_route()
+    return cmd_start()
+
+
+def cmd_supervise() -> int:
+    from cctv_ui.supervisor import run_once
+
+    run_once()
+    return 0
 
 
 def _power(action: Literal["reboot", "poweroff"]) -> int:

@@ -116,7 +116,7 @@ install_sudoers() {
   tmp="$(mktemp)"
   sudoers="/etc/sudoers.d/cctv-power"
   cat > "${tmp}" <<EOF
-${TARGET_USER} ALL=(root) NOPASSWD: ${systemctl} reboot, ${systemctl} poweroff
+${TARGET_USER} ALL=(root) NOPASSWD: ${systemctl} reboot, ${systemctl} poweroff, /usr/local/sbin/cctv-repair-network
 EOF
   need_sudo install -m 440 "${tmp}" "${sudoers}"
   rm -f "${tmp}"
@@ -148,17 +148,35 @@ enable_i2c() {
   need_sudo /sbin/modprobe i2c-dev
 }
 
+install_supervisor() {
+  echo "== stream on boot, and the health check =="
+  need_sudo install -m 755 "${REPO_ROOT}/scripts/cctv-repair-network.sh" /usr/local/sbin/cctv-repair-network
+  need_sudo install -d /etc/systemd/system.conf.d
+  need_sudo install -m 644 "${REPO_ROOT}/scripts/systemd/cctv-watchdog.conf" /etc/systemd/system.conf.d/cctv-watchdog.conf
+  local unit src
+  for unit in cctv-stream.service cctv-supervisor.service cctv-supervisor.timer; do
+    src="${REPO_ROOT}/scripts/systemd/${unit}"
+    sed -e "s/@USER@/${TARGET_USER}/g" -e "s|@HOME@|${TARGET_HOME}|g" "${src}" \
+      | need_sudo tee "/etc/systemd/system/${unit}" >/dev/null
+  done
+  need_sudo systemctl daemon-reload
+  need_sudo systemctl enable cctv-stream.service cctv-supervisor.timer
+}
+
 install_packages
 install_cloudflared
 setup_venv
 install_command
 install_profile
+install_supervisor
 install_sudoers
 enable_i2c
 
 echo
 echo "installed. viewer password is pass123."
 echo "commands: cctv start, cctv camera, cctv reboot, cctv shutdown, cctv link"
+echo "boot runs cctv start once networking is up."
+echo "health checks live in ~/.local/share/cctv/supervisor.conf"
 echo "panel recovery: touch ~/.local/share/cctv/skip-ui"
 if [[ "${NEED_REBOOT}" == 1 ]]; then
   echo "i2c was enabled. the touch panel needs a reboot."
