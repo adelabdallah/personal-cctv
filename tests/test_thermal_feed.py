@@ -73,6 +73,56 @@ class ThermalFeedTests(unittest.TestCase):
             camera._open_picamera2()
         start.assert_called_once_with((640, 480), camera_num=2)
 
+    def test_opencv_opens_the_v4l_node_without_forcing_fps(self) -> None:
+        camera = Camera(
+            CameraConfig(
+                id="deck",
+                name="HD Webcam",
+                backend="opencv",
+                device_index=10,
+                width=640,
+                height=480,
+                fps=8,
+            )
+        )
+
+        class _Capture:
+            def __init__(self) -> None:
+                self.opened = True
+                self.props: list[tuple[int, float]] = []
+
+            def isOpened(self) -> bool:
+                return self.opened
+
+            def release(self) -> None:
+                self.opened = False
+
+            def set(self, prop: int, value: float) -> bool:
+                self.props.append((prop, value))
+                return True
+
+            def get(self, prop: int) -> float:
+                return 0.0
+
+        capture = _Capture()
+        calls: list[tuple[object, ...]] = []
+
+        class _Cv2:
+            CAP_V4L2 = 200
+            CAP_PROP_FRAME_WIDTH = 3
+            CAP_PROP_FRAME_HEIGHT = 4
+            CAP_PROP_FPS = 5
+
+            @staticmethod
+            def VideoCapture(*args: object) -> _Capture:
+                calls.append(args)
+                return capture
+
+        with patch.dict("sys.modules", {"cv2": _Cv2()}):
+            camera._open_opencv()
+        self.assertEqual(calls, [("/dev/video10", 200)])
+        self.assertEqual([prop for prop, _value in capture.props], [3, 4])
+
     def test_local_post_and_viewer_button(self) -> None:
         from fastapi.testclient import TestClient
 

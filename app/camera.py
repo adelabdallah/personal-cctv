@@ -173,16 +173,22 @@ class Camera:
     def _open_opencv(self):
         import cv2
 
-        capture = cv2.VideoCapture(self.config.device_index)
+        index = self.config.device_index
+        api = getattr(cv2, "CAP_V4L2", 200)
+        capture = cv2.VideoCapture(f"/dev/video{index}", api)
         if not capture.isOpened():
+            capture.release()
+            capture = cv2.VideoCapture(index, api)
+        if not capture.isOpened():
+            capture.release()
             raise RuntimeError(
                 f"Could not open camera '{self.config.id}' "
-                f"(device_index={self.config.device_index})"
+                f"(device_index={index})"
             )
 
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.height)
-        capture.set(cv2.CAP_PROP_FPS, self.config.fps)
+        # Leave the webcam's own frame rate. config.fps only paces the stream.
 
         self.actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
