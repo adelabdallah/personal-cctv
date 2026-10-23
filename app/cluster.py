@@ -165,7 +165,7 @@ def peer_bases(port: int) -> list[str]:
     return bases
 
 
-def read_host(base: str, timeout: float = 0.4) -> Claim | None:
+def read_host(base: str, timeout: float = 2.0) -> Claim | None:
     try:
         with urlopen(f"{base}/cluster", timeout=timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
@@ -194,7 +194,7 @@ def read_host(base: str, timeout: float = 0.4) -> Claim | None:
     )
 
 
-def find_live_host(port: int, timeout: float = 0.4) -> Claim | None:
+def find_live_host(port: int, timeout: float = 2.0) -> Claim | None:
     bases = peer_bases(port)
     if not bases:
         return None
@@ -335,6 +335,7 @@ class Cluster:
         self._published_at = 0.0
         self._publishing = False
         self._last_post: dict[str, float] = {}
+        self._voting = False
 
     def hold_host(self) -> None:
         """Serve this machine alone. Used when the tailnet loop is off."""
@@ -502,12 +503,10 @@ class Cluster:
         last_post = 0.0
         while not self._stop.is_set():
             now = time.monotonic()
-            if now - last_vote >= 2:
+            if now - last_vote >= 2 and not self._voting:
                 last_vote = now
-                try:
-                    self.step()
-                except Exception:
-                    logger.exception("Cluster step failed")
+                self._voting = True
+                threading.Thread(target=self._vote, name="cctv-vote", daemon=True).start()
             if now - last_post >= 0.25:
                 last_post = now
                 try:
@@ -515,6 +514,14 @@ class Cluster:
                 except Exception:
                     logger.exception("Frame post failed")
             self._stop.wait(0.2)
+
+    def _vote(self) -> None:
+        try:
+            self.step()
+        except Exception:
+            logger.exception("Cluster step failed")
+        finally:
+            self._voting = False
 
 
 def _probe(port: int) -> list[Claim]:
