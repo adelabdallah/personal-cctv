@@ -73,6 +73,25 @@ class ThermalFeedTests(unittest.TestCase):
             camera._open_picamera2()
         start.assert_called_once_with((640, 480), camera_num=2)
 
+    def test_encode_jpeg_passes_bgr_to_simplejpeg(self) -> None:
+        from app.camera import encode_jpeg
+
+        seen: dict[str, object] = {}
+
+        def _encode(frame: object, quality: int, colorspace: str = "RGB") -> bytes:
+            seen["frame"] = frame
+            seen["quality"] = quality
+            seen["colorspace"] = colorspace
+            return JPEG
+
+        simple = type("SimpleJpeg", (), {"encode_jpeg": staticmethod(_encode)})
+        frame = object()
+        with patch.dict("sys.modules", {"cv2": None, "simplejpeg": simple}):
+            self.assertEqual(encode_jpeg(frame, 70), JPEG)
+        self.assertEqual(seen["colorspace"], "BGR")
+        self.assertEqual(seen["quality"], 70)
+        self.assertIs(seen["frame"], frame)
+
     def test_opencv_opens_the_v4l_node_without_forcing_fps(self) -> None:
         camera = Camera(
             CameraConfig(

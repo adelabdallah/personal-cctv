@@ -13,9 +13,11 @@ logger = logging.getLogger(__name__)
 
 
 def start_picamera2(size: tuple[int, int], camera_num: int = 0):
-    """Open the Pi camera module upright, with the room exposed against a bright window.
+    """Open the Pi camera module upright, with normal auto exposure.
 
-    The module is mounted upside down, so the image is rotated 180 degrees.
+    Official modules rotate the sensor 180 degrees unless the transform is
+    identity. Identity turns this upside-down mount the right way up, and
+    the normal exposure constraint keeps the room's colour.
     """
     from libcamera import Transform, controls
     from picamera2 import Picamera2
@@ -23,7 +25,7 @@ def start_picamera2(size: tuple[int, int], camera_num: int = 0):
     cam = Picamera2(camera_num=camera_num)
     config = cam.create_preview_configuration(
         main={"size": size, "format": "RGB888"},
-        transform=Transform(hflip=1, vflip=1),
+        transform=Transform(),
     )
     cam.configure(config)
     cam.set_controls(
@@ -31,8 +33,7 @@ def start_picamera2(size: tuple[int, int], camera_num: int = 0):
             "AeEnable": True,
             "AwbEnable": True,
             "AwbMode": controls.AwbModeEnum.Auto,
-            "AeConstraintMode": controls.AeConstraintModeEnum.Shadows,
-            "ExposureValue": 0.0,
+            "AeConstraintMode": controls.AeConstraintModeEnum.Normal,
         }
     )
     cam.start()
@@ -55,7 +56,8 @@ def encode_jpeg(frame, quality: int) -> bytes | None:
     try:
         import simplejpeg
 
-        return simplejpeg.encode_jpeg(frame, quality=quality)
+        # OpenCV frames and Picamera2 RGB888 are both BGR in memory.
+        return simplejpeg.encode_jpeg(frame, quality=quality, colorspace="BGR")
     except ImportError:
         return None
 
