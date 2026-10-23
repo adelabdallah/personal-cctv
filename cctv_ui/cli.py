@@ -12,7 +12,12 @@ from cctv_ui.service import format_link, format_start, power_action, ui_command
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cctv")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("start", help="start the camera server and a Cloudflare quick tunnel")
+    start = sub.add_parser("start", help="start the camera server and publish it on Tailscale")
+    start.add_argument(
+        "--takeover",
+        action="store_true",
+        help="become the host when another device is already hosting",
+    )
     sub.add_parser("camera", help="show the camera on the panel")
     sub.add_parser("reboot", help="restart the Pi")
     sub.add_parser("shutdown", help="shut down the Pi")
@@ -22,7 +27,6 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("supervise", help="repair or reboot if the network or stream stays down")
     args = parser.parse_args(argv)
     handlers = {
-        "start": cmd_start,
         "camera": cmd_camera,
         "reboot": cmd_reboot,
         "shutdown": cmd_shutdown,
@@ -31,11 +35,13 @@ def main(argv: list[str] | None = None) -> int:
         "boot": cmd_boot,
         "supervise": cmd_supervise,
     }
+    if args.command == "start":
+        return cmd_start(args.takeover)
     return handlers[args.command]()
 
 
-def cmd_start() -> int:
-    code, text = format_start()
+def cmd_start(takeover: bool) -> int:
+    code, text = format_start(takeover=takeover)
     sys.stdout.write(text)
     return code
 
@@ -75,7 +81,7 @@ def cmd_boot() -> int:
     from cctv_ui.supervisor import wait_for_route
 
     wait_for_route()
-    return cmd_start()
+    return cmd_start(False)
 
 
 def cmd_supervise() -> int:

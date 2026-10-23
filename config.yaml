@@ -10,6 +10,7 @@ cameras:
     height: 480
     fps: 12
     jpeg_quality: 70
+    # slow: true posts one JPEG per second from the start
 
   # Uncomment and adjust device_index when adding more cameras
   # - id: backyard

@@ -7,6 +7,7 @@ import time
 from collections.abc import Generator
 
 from app.config import CameraConfig
+from app.feeds import SLOW_S
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,9 @@ class Camera:
         self._capture = None
         self._picam = None
         self._latest_jpeg: bytes | None = None
+        self._arrived_at = 0.0
+        self._thermal: bytes | None = None
+        self._slow = config.slow
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -102,8 +106,33 @@ class Camera:
         with self._lock:
             return self._latest_jpeg
 
+    def arrived_at(self) -> float:
+        with self._lock:
+            return self._arrived_at
+
+    def store_thermal(self, jpeg: bytes) -> None:
+        with self._lock:
+            self._thermal = jpeg
+
+    def thermal_jpeg(self) -> bytes | None:
+        with self._lock:
+            return self._thermal
+
+    @property
+    def slow(self) -> bool:
+        with self._lock:
+            return self._slow
+
+    def set_slow(self, slow: bool) -> None:
+        with self._lock:
+            self._slow = slow
+
+    def frame_interval(self) -> float:
+        if self.slow:
+            return SLOW_S
+        return 1.0 / max(self.config.fps, 1)
+
     def mjpeg_frames(self) -> Generator[bytes, None, None]:
-        frame_interval = 1.0 / max(self.config.fps, 1)
         boundary = b"frame"
 
         while not self._stop_event.is_set():
@@ -116,7 +145,7 @@ class Camera:
                     + jpeg
                     + b"\r\n"
                 )
-            time.sleep(frame_interval)
+            time.sleep(self.frame_interval())
 
     def _open(self) -> None:
         if self.config.backend == "picamera2":
@@ -191,6 +220,7 @@ class Camera:
             return
         with self._lock:
             self._latest_jpeg = jpeg
+            self._arrived_at = time.monotonic()
 
     def _grab_picamera2(self) -> None:
         assert self._picam is not None
@@ -223,8 +253,6 @@ class Camera:
         self._store_jpeg(encode_jpeg(frame, self.config.jpeg_quality))
 
     def _capture_loop(self) -> None:
-        frame_interval = 1.0 / max(self.config.fps, 1)
-
         while not self._stop_event.is_set():
             try:
                 self._open()
@@ -237,7 +265,7 @@ class Camera:
                 self._close()
                 time.sleep(1)
                 continue
-            time.sleep(frame_interval)
+            time.sleep(self.frame_interval())
 
 
 class CameraManager:

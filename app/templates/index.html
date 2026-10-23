@@ -32,16 +32,18 @@
     <a class="logout" href="/logout">Log out</a>
   </header>
 
-  <main class="camera-grid">
+  <main class="camera-stack" data-camera-stack>
     {% for camera in cameras %}
-    <section class="camera-tile">
+    <section class="camera-tile{% if not camera.fresh %} is-offline{% endif %}" data-camera-id="{{ camera.id }}">
       <div class="camera-header">
         <h2>{{ camera.name }}</h2>
         <div class="camera-meta">
-          {% if thermal_enabled %}
-          <button type="button" class="thermal-toggle" data-thermal-toggle>Show thermal feed</button>
-          {% endif %}
+          <button type="button" class="slow-toggle" data-slow-toggle aria-pressed="{{ 'true' if camera.slow else 'false' }}">{% if camera.slow %}Slow mode on{% else %}Slow mode{% endif %}</button>
+          <button type="button" class="thermal-toggle" data-thermal-toggle {% if not camera.thermal %}hidden{% endif %}>Show thermal feed</button>
+          {% if camera.width %}
           <span class="resolution">{{ camera.width }}x{{ camera.height }}</span>
+          {% endif %}
+          <span class="offline-note" {% if camera.fresh %}hidden{% endif %}>Offline</span>
         </div>
       </div>
       <div class="stream-frame">
@@ -50,9 +52,7 @@
           src="/stream/{{ camera.id }}"
           alt="Live stream for {{ camera.name }}"
         >
-        {% if thermal_enabled %}
         <img class="thermal-pip" data-thermal-pip alt="Thermal feed" hidden>
-        {% endif %}
       </div>
     </section>
     {% endfor %}

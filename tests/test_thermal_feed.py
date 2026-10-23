@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 os.environ["CCTV_PASSWORD"] = "test-password"
 os.environ["SESSION_SECRET"] = "test-secret"
+os.environ["INGEST_TOKEN"] = "test-token"
+os.environ["CCTV_CLUSTER"] = "0"
 
 from app.camera import Camera
 from app.config import CameraConfig, get_settings, load_thermal_enabled
@@ -90,7 +92,7 @@ class ThermalFeedTests(unittest.TestCase):
                 with TestClient(app, client=("127.0.0.1", 50000)) as client:
                     posted = client.post("/thermal", content=JPEG)
                     self.assertEqual(posted.status_code, 200)
-                    locked = client.get("/thermal")
+                    locked = client.get("/thermal/deck")
                     self.assertEqual(locked.status_code, 401)
                     client.post("/login", data={"password": "test-password"})
                     page = client.get("/")
@@ -100,7 +102,7 @@ class ThermalFeedTests(unittest.TestCase):
                         html.index("Show thermal feed"),
                         html.index('class="resolution"'),
                     )
-                    with client.stream("GET", "/thermal") as response:
+                    with client.stream("GET", "/thermal/deck") as response:
                         self.assertEqual(response.status_code, 200)
                         chunk = next(response.iter_bytes())
                     self.assertIn(JPEG, chunk)
@@ -128,7 +130,7 @@ class ThermalFeedTests(unittest.TestCase):
                 )
                 self.assertEqual(signed.status_code, 303)
                 page = client.get("/")
-                self.assertNotIn("Show thermal feed", page.text)
+                self.assertIn("data-thermal-toggle hidden", page.text)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ class CameraConfig(BaseModel):
     height: int = 480
     fps: int = 12
     jpeg_quality: int = Field(default=70, ge=1, le=100)
+    slow: bool = False
 
 
 class Settings(BaseSettings):
@@ -33,7 +34,8 @@ class Settings(BaseSettings):
 
     cctv_password: str
     session_secret: str
-    host: str = "127.0.0.1"
+    ingest_token: str = "cctv-ingest"
+    host: str = "0.0.0.0"
     port: int = 8000
     config_path: Path = Field(default=DEFAULT_CONFIG_PATH)
 

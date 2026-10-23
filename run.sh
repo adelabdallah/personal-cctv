@@ -15,7 +15,7 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-HOST=$(grep -E '^HOST=' .env | cut -d= -f2- || echo "127.0.0.1")
+HOST=$(grep -E '^HOST=' .env | cut -d= -f2- || echo "0.0.0.0")
 PORT=$(grep -E '^PORT=' .env | cut -d= -f2- || echo "8000")
 
 echo "Starting CCTV server on http://${HOST}:${PORT}"

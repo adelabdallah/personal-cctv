@@ -1,10 +1,9 @@
-"""Start the local viewer and publish a trycloudflare.com link."""
+"""Start the local viewer. The server publishes the page with Tailscale Funnel."""
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import secrets
 import shutil
 import signal
@@ -15,16 +14,14 @@ import time
 from pathlib import Path
 from typing import Literal
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 VIEWER_PASSWORD = "pass123"
 DEFAULT_PORT = 8000
 CAMERA_ID = "camera"
 START_WAIT_S = 25.0
-TUNNEL_WAIT_S = 20.0
-# Quick Tunnel names are several hyphenated words. api.trycloudflare.com is the
-# create-tunnel endpoint and shows up in failure lines before the real hostname.
-TUNNEL_URL_RE = re.compile(r"https://[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com")
+LINK_WAIT_S = 20.0
+DEFAULT_INGEST_TOKEN = "cctv-ingest"
 PowerAction = Literal["reboot", "poweroff"]
 
 
@@ -62,11 +59,6 @@ def log_file() -> Path:
     return state_dir() / "cctv.log"
 
 
-def tunnel_log_file() -> Path:
-    """Log for the current cloudflared only. Truncated each time a tunnel starts."""
-    return state_dir() / "tunnel.log"
-
-
 def ui_socket_path() -> Path:
     return state_dir() / "ui.sock"
 
@@ -75,43 +67,22 @@ def skip_path() -> Path:
     return state_dir() / "skip-ui"
 
 
-def parse_tunnel_url(text: str) -> str | None:
-    found = TUNNEL_URL_RE.findall(text)
-    return found[-1] if found else None
-
-
-def _saved_url() -> str:
-    try:
-        return url_file().read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-
-
 def public_url() -> str | None:
-    """Return the hostname of the cloudflared that is running now.
-
-    A saved name from a tunnel that has already exited is dropped. A name is
-    pinned to the current process the first time that process logs one, so a
-    later line in a shared log cannot replace it.
-    """
-    meta = _read_meta()
-    if not _pid_alive(meta.get("tunnel_pid")):
-        if meta.get("url") or _saved_url():
-            _forget_public_url()
+    """Return the viewer URL published by the running server."""
+    if not is_running():
         return None
-    pinned = meta.get("url")
-    if isinstance(pinned, str) and parse_tunnel_url(pinned):
-        if pinned != _saved_url():
-            url_file().write_text(pinned + "\n", encoding="utf-8")
-        return pinned
-    harvested = _harvest_url()
-    if not harvested:
+    try:
+        with urlopen(f"http://127.0.0.1:{stream_port()}/cluster", timeout=1) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (OSError, URLError, json.JSONDecodeError, ValueError, TimeoutError):
         return None
-    meta = _read_meta()
-    meta["url"] = harvested
-    _write_meta(meta)
-    url_file().write_text(harvested + "\n", encoding="utf-8")
-    return harvested
+    if not isinstance(payload, dict):
+        return None
+    url = payload.get("public_url")
+    if not isinstance(url, str) or not url:
+        return None
+    url_file().write_text(url + "\n", encoding="utf-8")
+    return url
 
 
 def viewer_password() -> str:
@@ -130,16 +101,6 @@ def _write_meta(data: dict) -> None:
     meta_file().write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def _forget_public_url() -> None:
-    meta = _read_meta()
-    meta.pop("url", None)
-    _write_meta(meta)
-    try:
-        url_file().unlink()
-    except OSError:
-        pass
-
-
 def _env_value(key: str) -> str | None:
     try:
         lines = env_file().read_text(encoding="utf-8").splitlines()
@@ -154,12 +115,14 @@ def _env_value(key: str) -> str | None:
 def ensure_env() -> dict[str, str]:
     secret = _env_value("SESSION_SECRET") or secrets.token_hex(32)
     port = _env_value("PORT") or str(DEFAULT_PORT)
+    token = _env_value("INGEST_TOKEN") or DEFAULT_INGEST_TOKEN
     path = env_file()
     path.write_text(
         (
             f"CCTV_PASSWORD={VIEWER_PASSWORD}\n"
             f"SESSION_SECRET={secret}\n"
-            f"HOST=127.0.0.1\n"
+            f"INGEST_TOKEN={token}\n"
+            f"HOST=0.0.0.0\n"
             f"PORT={port}\n"
         ),
         encoding="utf-8",
@@ -171,7 +134,8 @@ def ensure_env() -> dict[str, str]:
     return {
         "CCTV_PASSWORD": VIEWER_PASSWORD,
         "SESSION_SECRET": secret,
-        "HOST": "127.0.0.1",
+        "INGEST_TOKEN": token,
+        "HOST": "0.0.0.0",
         "PORT": port,
     }
 
@@ -267,6 +231,25 @@ def _kill_tree(pid: int) -> None:
             return
 
 
+def _our_cloudflared_pids() -> list[int]:
+    """Leftover quick tunnels from before Funnel. Empty where /proc is unavailable."""
+    root = Path("/proc")
+    if not root.is_dir():
+        return []
+    found: list[int] = []
+    for entry in root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        command = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        if "cloudflared" in command and "--url" in command and "127.0.0.1" in command:
+            found.append(int(entry.name))
+    return found
+
+
 def stop_stream() -> None:
     meta = _read_meta()
     for key in ("app_pid", "tunnel_pid"):
@@ -301,11 +284,11 @@ def _python() -> str:
     return sys.executable or shutil.which("python3") or "python3"
 
 
-def start_stream(*, restart: bool = False) -> str | None:
-    """Start uvicorn and a quick tunnel. Return an error string, or None.
+def start_stream(*, restart: bool = False, takeover: bool = False) -> str | None:
+    """Start uvicorn. The process joins the tailnet and publishes Funnel when it is host.
 
-    When the server is already healthy, leave it running and refresh the public
-    link. ``restart`` stops that server first and brings a new one up.
+    When the server is already healthy, leave it running. ``takeover`` asks that
+    process to become the host. ``restart`` stops the server first.
     """
     root = repo_root()
     if not (root / "app" / "main.py").is_file():
@@ -313,11 +296,14 @@ def start_stream(*, restart: bool = False) -> str | None:
     settings = ensure_env()
     write_config()
     if running_healthy() and not restart:
-        _recover_public_url(settings)
+        if takeover:
+            _request_takeover(settings["PORT"])
         return None
     stop_stream()
     log = log_file().open("ab")
     env = _process_env(settings)
+    env["CCTV_TAKEOVER"] = "1" if takeover else "0"
+    env["CCTV_CLUSTER"] = "1"
     try:
         app = subprocess.Popen(
             [
@@ -326,7 +312,7 @@ def start_stream(*, restart: bool = False) -> str | None:
                 "uvicorn",
                 "app.main:app",
                 "--host",
-                "127.0.0.1",
+                "0.0.0.0",
                 "--port",
                 settings["PORT"],
             ],
@@ -346,131 +332,19 @@ def start_stream(*, restart: bool = False) -> str | None:
     if err:
         stop_stream()
         return f"cctv did not become ready ({err})"
-    tunnel_err = _start_tunnel(settings["PORT"], env, log)
-    if tunnel_err:
-        meta = _read_meta()
-        meta["tunnel_error"] = tunnel_err
-        _write_meta(meta)
-        return None
     _wait_public_url()
     return None
 
 
-def _recover_public_url(settings: dict[str, str]) -> None:
-    if public_url():
+def _request_takeover(port: str) -> None:
+    request = Request(f"http://127.0.0.1:{port}/cluster/takeover", data=b"", method="POST")
+    try:
+        urlopen(request, timeout=2)
+    except (OSError, URLError, TimeoutError):
         return
-    log = log_file().open("ab")
-    _stop_tunnel()
-    err = _start_tunnel(settings["PORT"], _process_env(settings), log)
-    if err:
-        meta = _read_meta()
-        meta["tunnel_error"] = err
-        _write_meta(meta)
-        return
-    _wait_public_url()
 
 
-def _stop_tunnel() -> None:
-    meta = _read_meta()
-    pid = meta.get("tunnel_pid")
-    if isinstance(pid, int):
-        _kill_tree(pid)
-    for stray in _our_cloudflared_pids():
-        _kill_tree(stray)
-    meta["tunnel_pid"] = None
-    meta.pop("url", None)
-    _write_meta(meta)
-    try:
-        url_file().unlink()
-    except OSError:
-        pass
-
-
-def _cloudflared() -> str | None:
-    found = shutil.which("cloudflared")
-    if found:
-        return found
-    candidate = Path.home() / ".local" / "bin" / "cloudflared"
-    if candidate.is_file() and os.access(candidate, os.X_OK):
-        return str(candidate)
-    return None
-
-
-def _our_cloudflared_pids() -> list[int]:
-    """cloudflared processes this app started. Empty where /proc is unavailable."""
-    root = Path("/proc")
-    if not root.is_dir():
-        return []
-    found: list[int] = []
-    for entry in root.iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            raw = (entry / "cmdline").read_bytes()
-        except OSError:
-            continue
-        command = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
-        if "cloudflared" in command and "--url" in command and "127.0.0.1" in command:
-            found.append(int(entry.name))
-    return found
-
-
-def _start_tunnel(port: str, env: dict[str, str], log) -> str | None:
-    del log
-    cloudflared = _cloudflared()
-    if cloudflared is None:
-        return "cloudflared is not installed"
-    _stop_tunnel()
-    try:
-        handle = tunnel_log_file().open("wb")
-    except OSError as exc:
-        return f"cloudflared failed ({exc})"
-    try:
-        proc = subprocess.Popen(
-            [
-                cloudflared,
-                "tunnel",
-                "--url",
-                f"http://127.0.0.1:{port}",
-                "--no-autoupdate",
-            ],
-            env=env,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    except OSError as exc:
-        handle.close()
-        return f"cloudflared failed ({exc})"
-    handle.close()
-    meta = _read_meta()
-    meta["tunnel_pid"] = proc.pid
-    meta["tunnel_log_offset"] = 0
-    meta.pop("url", None)
-    meta.pop("tunnel_error", None)
-    _write_meta(meta)
-    return None
-
-
-def _harvest_url() -> str | None:
-    """First quick-tunnel hostname in the current tunnel log."""
-    raw_offset = _read_meta().get("tunnel_log_offset")
-    try:
-        offset = int(raw_offset or 0)
-    except (TypeError, ValueError):
-        offset = 0
-    try:
-        with tunnel_log_file().open("rb") as handle:
-            if offset:
-                handle.seek(offset)
-            chunk = handle.read().decode("utf-8", errors="replace")
-    except OSError:
-        return None
-    found = TUNNEL_URL_RE.findall(chunk)
-    return found[0] if found else None
-
-
-def _wait_public_url(timeout: float = TUNNEL_WAIT_S) -> str | None:
+def _wait_public_url(timeout: float = LINK_WAIT_S) -> str | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         url = public_url()
@@ -486,27 +360,20 @@ def format_link() -> str:
     url = public_url()
     password = viewer_password()
     error = tunnel_error()
-    if error and not url:
-        return f"{error}\nviewer password: {password}\n"
     if url:
         return f"{url}\nviewer password: {password}\n"
-    if not _pid_alive(_read_meta().get("tunnel_pid")):
-        return (
-            "cctv is up locally. the public tunnel is not running.\n"
-            "run: cctv start\n"
-            f"viewer password: {password}\n"
-        )
+    if error:
+        return f"{error}\nviewer password: {password}\n"
     return (
-        "cctv is up locally. the public link is still coming up.\n"
-        "wait a few seconds and run: cctv link\n"
+        "cctv is up locally. the public link is not up.\n"
         f"viewer password: {password}\n"
     )
 
 
-def format_start() -> tuple[int, str]:
+def format_start(*, takeover: bool = False) -> tuple[int, str]:
     ui_command("release", timeout=6.0)
     already = running_healthy()
-    err = start_stream()
+    err = start_stream(takeover=takeover)
     ui_command("refresh", timeout=1.0)
     if err:
         return 1, err + "\n"

@@ -1,6 +1,6 @@
 # Personal CCTV
 
-Self-hosted home CCTV: USB webcams on a macOS laptop stream live MJPEG footage to a password-protected web page, reachable from anywhere via a Cloudflare Tunnel.
+Self-hosted home CCTV. Cameras on your tailnet post live MJPEG to one host, and a password-protected page on that host is reachable through Tailscale Funnel.
 
 ## Features (MVP)
 
@@ -8,13 +8,13 @@ Self-hosted home CCTV: USB webcams on a macOS laptop stream live MJPEG footage t
 - 480p streaming by default (854x480), bump to 720p via config
 - Password-protected web viewer
 - MJPEG over HTTP (works in any browser, no plugins)
-- Cloudflare Tunnel for remote access without port forwarding
+- Tailscale Funnel for remote access without port forwarding
 
 ## Requirements
 
 - macOS with Python 3.9+ (3.11+ recommended)
 - USB webcam(s)
-- [Homebrew](https://brew.sh/) (for `cloudflared`)
+- [Tailscale](https://tailscale.com/) on each device that streams or hosts
 
 
 
@@ -61,6 +61,7 @@ cameras:
 | `width` / `height` | Target resolution (480p: 854x480, 720p: 1280x720)   |
 | `fps`              | Capture and stream rate                             |
 | `jpeg_quality`     | JPEG compression (1–100)                            |
+| `slow`             | Start at one JPEG per second. The page can change it per camera. |
 
 
 
@@ -84,43 +85,15 @@ chmod +x run.sh tunnel.sh
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000), sign in, and confirm the live stream.
 
-## Remote access (Cloudflare Tunnel)
+## Remote access (Tailscale)
 
+Devices that stream find each other on the tailnet. The first one to start is the host. The others post JPEGs to it. A later device can take the page with `cctv start --takeover` (or Become host on the deck) so a smaller machine can hand off to a stronger one.
 
+The host turns on Tailscale Funnel. The public page is `https://<host>.<tailnet>.ts.net`. `cctv link` prints that address. A bookmark to another device that is on redirects to the current host.
 
-### Quick tunnel (testing)
+Every device needs the same `CCTV_PASSWORD` and `INGEST_TOKEN`. The server listens on `0.0.0.0` so tailnet peers can post frames. The viewer password still guards the page, and the ingest token guards frame uploads.
 
-In a second terminal, with `./run.sh` already running:
-
-```bash
-./tunnel.sh
-```
-
-`cloudflared` prints a boxed public URL like `https://random-words.trycloudflare.com`. **Use only that link.** It also appears again under `OPEN THIS URL IN YOUR BROWSER` when `tunnel.sh` detects it.
-
-Do **not** open `region1.v2.argotunnel.com` or other `*.argotunnel.com` addresses. Those are internal Cloudflare tunnel endpoints, not your public viewer URL, and they will show Cloudflare Error 1000.
-
-If you do not see a `trycloudflare.com` URL:
-
-1. Scroll up in the `tunnel.sh` terminal — it appears within a few seconds in a bordered box.
-2. Confirm `./run.sh` is running and listening on the same `PORT` as `.env`.
-3. Make sure you are not using a named tunnel config. Quick tunnels do not work if `~/.cloudflared/config.yml` exists — temporarily rename that file.
-4. If the tunnel fails to connect, retry with HTTP/2: `cloudflared tunnel --url http://127.0.0.1:8000 --protocol http2`
-
-Open the `trycloudflare.com` URL, sign in, and view the stream from any network.
-
-### Named tunnel (permanent URL)
-
-For a stable URL on your own domain:
-
-1. Install cloudflared: `brew install cloudflared`
-2. Log in: `cloudflared tunnel login`
-3. Create a tunnel: `cloudflared tunnel create personal-cctv`
-4. Route DNS to the tunnel (Cloudflare dashboard or `cloudflared tunnel route dns`)
-5. Create a config file (e.g. `~/.cloudflared/config.yml`) pointing to `http://localhost:8000`
-6. Run: `cloudflared tunnel run personal-cctv`
-
-See [Cloudflare Tunnel docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for full setup.
+Funnel has an unpublished bandwidth cap. The public name is up only while Tailscale is up on the current host. The Mac App Store build of Tailscale cannot turn Funnel on. If that Mac is the host, other tailnet devices can still open `http://<magicdns>:8000`, and a public link returns when a Linux device takes over.
 
 ## Bumping to 720p
 
@@ -133,18 +106,23 @@ fps: 10
 jpeg_quality: 65
 ```
 
-Restart `./run.sh` and re-test over the tunnel. Lower fps/quality if bandwidth is tight on cellular.
+Restart `./run.sh` and open the page again. Lower fps or quality if bandwidth is tight on cellular.
 
 ## API routes
 
 
 | Route                       | Auth | Description        |
 | --------------------------- | ---- | ------------------ |
-| `GET /`                     | Yes  | Camera grid viewer |
+| `GET /`                     | Yes  | Scrollable stack of live feeds |
 | `GET /login`, `POST /login` | No   | Password login     |
 | `GET /logout`               | No   | Clear session      |
 | `GET /stream/{camera_id}`   | Yes  | MJPEG live stream  |
 | `GET /snapshot/{camera_id}` | Yes  | Single JPEG frame  |
+| `GET /thermal/{camera_id}`  | Yes  | Thermal overlay for that feed |
+| `GET /status`               | Yes  | Freshness, thermal, and slow mode |
+| `POST /cameras/{camera_id}/slow` | Yes | Set that camera to one JPEG per second |
+| `POST /ingest/{camera_id}`  | Bearer | JPEG from another device. `X-Slow: 1` asks to start at one frame a second |
+| `GET /cluster`              | No   | Which device is the host |
 | `GET /healthz`              | No   | Liveness check     |
 
 
@@ -156,7 +134,8 @@ On the Pi, the touchscreen UI starts on tty1 at boot. The same actions are avail
 
 | Command | What it does |
 | --- | --- |
-| `cctv start` | Start the camera server and a Cloudflare quick tunnel |
+| `cctv start` | Start the camera server. It joins the tailnet host, or becomes the host, and publishes Tailscale Funnel |
+| `cctv start --takeover` | Become the host when another device is already hosting |
 | `cctv camera` | Show the camera on the panel |
 | `cctv reboot` | Restart the Pi |
 | `cctv shutdown` | Shut the Pi down |
