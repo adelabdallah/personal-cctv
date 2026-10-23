@@ -11,7 +11,7 @@ from app.config import CameraConfig
 logger = logging.getLogger(__name__)
 
 
-def start_picamera2(size: tuple[int, int]):
+def start_picamera2(size: tuple[int, int], camera_num: int = 0):
     """Open the Pi camera module upright, with the room exposed against a bright window.
 
     The module is mounted upside down, so the image is rotated 180 degrees.
@@ -19,7 +19,7 @@ def start_picamera2(size: tuple[int, int]):
     from libcamera import Transform, controls
     from picamera2 import Picamera2
 
-    cam = Picamera2()
+    cam = Picamera2(camera_num=camera_num)
     config = cam.create_preview_configuration(
         main={"size": size, "format": "RGB888"},
         transform=Transform(hflip=1, vflip=1),
@@ -171,7 +171,10 @@ class Camera:
         )
 
     def _open_picamera2(self) -> None:
-        self._picam = start_picamera2((self.config.width, self.config.height))
+        self._picam = start_picamera2(
+            (self.config.width, self.config.height),
+            camera_num=self.config.device_index,
+        )
         self.actual_width = self.config.width
         self.actual_height = self.config.height
         self.actual_fps = float(self.config.fps)

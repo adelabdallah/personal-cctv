@@ -162,9 +162,29 @@ button {
   font-size: 1rem;
 }
 
+.camera-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.thermal-toggle {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.25rem 0.6rem;
+  font: inherit;
+  cursor: pointer;
+}
+
 .resolution {
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+.stream-frame {
+  position: relative;
 }
 
 .stream {
@@ -172,5 +192,16 @@ button {
   width: 100%;
   aspect-ratio: 16 / 9;
   object-fit: contain;
+  background: #000;
+}
+
+.thermal-pip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 31.6%;
+  height: 31.6%;
+  object-fit: cover;
+  border: 1px solid var(--border);
   background: #000;
 }

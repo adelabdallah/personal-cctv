@@ -52,6 +52,11 @@ def _load_config_data(config_path: Path | None = None) -> dict:
     return data
 
 
+def load_thermal_enabled(config_path: Path | None = None) -> bool:
+    data = _load_config_data(config_path)
+    return data.get("thermal") is True
+
+
 def load_app_name(config_path: Path | None = None) -> str:
     data = _load_config_data(config_path)
     name = data.get("app_name", DEFAULT_APP_NAME)

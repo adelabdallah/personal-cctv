@@ -37,13 +37,23 @@
     <section class="camera-tile">
       <div class="camera-header">
         <h2>{{ camera.name }}</h2>
-        <span class="resolution">{{ camera.width }}x{{ camera.height }}</span>
+        <div class="camera-meta">
+          {% if thermal_enabled %}
+          <button type="button" class="thermal-toggle" data-thermal-toggle>Show thermal feed</button>
+          {% endif %}
+          <span class="resolution">{{ camera.width }}x{{ camera.height }}</span>
+        </div>
       </div>
-      <img
-        class="stream"
-        src="/stream/{{ camera.id }}"
-        alt="Live stream for {{ camera.name }}"
-      >
+      <div class="stream-frame">
+        <img
+          class="stream"
+          src="/stream/{{ camera.id }}"
+          alt="Live stream for {{ camera.name }}"
+        >
+        {% if thermal_enabled %}
+        <img class="thermal-pip" data-thermal-pip alt="Thermal feed" hidden>
+        {% endif %}
+      </div>
     </section>
     {% endfor %}
   </main>

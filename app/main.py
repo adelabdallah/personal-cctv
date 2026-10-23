@@ -10,8 +10,9 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth import LoginRequired, login, logout, verify_password
 from app.camera import CameraManager
-from app.config import get_settings, load_app_name, load_camera_configs
+from app.config import get_settings, load_app_name, load_camera_configs, load_thermal_enabled
 from app.host import HOT_C, LOW_BATTERY_PERCENT, read_host_status
+from app.thermal import ThermalFeed, mjpeg_frames
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ async def lifespan(app: FastAPI):
     manager = CameraManager(camera_configs)
     manager.start_all()
     app.state.camera_manager = manager
+    app.state.thermal_enabled = load_thermal_enabled(settings.config_path)
+    app.state.thermal_feed = ThermalFeed()
 
     logger.info("Started %d camera(s)", len(camera_configs))
     yield
@@ -105,6 +108,7 @@ async def index(request: Request):
             "host": read_host_status(),
             "hot_c": HOT_C,
             "low_battery_percent": LOW_BATTERY_PERCENT,
+            "thermal_enabled": bool(getattr(request.app.state, "thermal_enabled", False)),
         },
     )
 
@@ -164,6 +168,29 @@ async def preview_camera(request: Request, camera_id: str):
     if camera is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
     return _jpeg_or_503(camera)
+
+
+@app.post("/thermal")
+async def post_thermal(request: Request) -> dict[str, bool]:
+    if not _local_client(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="local only")
+    if not getattr(request.app.state, "thermal_enabled", False):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="thermal is off")
+    body = await request.body()
+    if len(body) > 1_000_000 or not body.startswith(b"\xff\xd8"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expected a jpeg")
+    request.app.state.thermal_feed.store(body)
+    return {"ok": True}
+
+
+@app.get("/thermal")
+async def thermal_stream(request: Request, _: LoginRequired):
+    if not getattr(request.app.state, "thermal_enabled", False):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="thermal is off")
+    return StreamingResponse(
+        mjpeg_frames(request.app.state.thermal_feed),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 @app.get("/cameras")

@@ -1,4 +1,27 @@
 (() => {
+  function bindThermal() {
+    document.querySelectorAll("[data-thermal-toggle]").forEach((button) => {
+      const tile = button.closest(".camera-tile");
+      const pip = tile && tile.querySelector("[data-thermal-pip]");
+      if (!pip) {
+        return;
+      }
+      button.addEventListener("click", () => {
+        const show = pip.hidden;
+        pip.hidden = !show;
+        if (show) {
+          pip.src = "/thermal";
+          button.textContent = "Hide thermal feed";
+        } else {
+          pip.removeAttribute("src");
+          button.textContent = "Show thermal feed";
+        }
+      });
+    });
+  }
+
+  bindThermal();
+
   const root = document.querySelector("[data-host-status]");
   if (!root) {
     return;
