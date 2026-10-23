@@ -18,6 +18,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="become the host when another device is already hosting",
     )
+    start.add_argument(
+        "--camera",
+        default=None,
+        help="camera name to open when more than one is connected",
+    )
     sub.add_parser("camera", help="show the camera on the panel")
     sub.add_parser("reboot", help="restart the Pi")
     sub.add_parser("shutdown", help="shut down the Pi")
@@ -36,12 +41,12 @@ def main(argv: list[str] | None = None) -> int:
         "supervise": cmd_supervise,
     }
     if args.command == "start":
-        return cmd_start(args.takeover)
+        return cmd_start(args.takeover, args.camera)
     return handlers[args.command]()
 
 
-def cmd_start(takeover: bool) -> int:
-    code, text = format_start(takeover=takeover)
+def cmd_start(takeover: bool, camera: str | None = None) -> int:
+    code, text = format_start(takeover=takeover, camera=camera)
     sys.stdout.write(text)
     return code
 

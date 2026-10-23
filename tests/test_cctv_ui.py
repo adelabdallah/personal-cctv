@@ -15,12 +15,16 @@ from cctv_ui.cli import main
 from cctv_ui.display import kmsdrm_device_index, logical_to_panel, panel_to_logical, set_backlight
 from cctv_ui.kiosk import BLANK_AFTER_S, UiServer, UiState, _mark_input, _maybe_blank, home_buttons, read_cpu_temp_c
 from cctv_ui.service import (
+    choose_camera,
+    config_file,
     ensure_env,
     env_file,
     format_link,
     meta_file,
+    start_stream,
     ui_command,
     viewer_password,
+    write_config,
 )
 from cctv_ui.theme import LOGICAL_H, LOGICAL_W
 
@@ -91,6 +95,54 @@ class StateDirTest(unittest.TestCase):
         self.assertEqual(first["CCTV_PASSWORD"], "pass123")
         self.assertEqual(second["SESSION_SECRET"], first["SESSION_SECRET"])
         self.assertIn("CCTV_PASSWORD=pass123", env_file().read_text(encoding="utf-8"))
+
+    def test_choose_camera_picks_the_first_or_a_name(self) -> None:
+        cameras = [
+            {"name": "imx219", "backend": "picamera2", "device_index": 0},
+            {"name": "USB camera", "backend": "opencv", "device_index": 2},
+        ]
+        with patch("cctv_ui.service.discover_cameras", return_value=cameras):
+            chosen, err = choose_camera(None)
+            self.assertIsNone(err)
+            self.assertEqual(chosen["name"], "imx219")
+            chosen, err = choose_camera("usb camera")
+            self.assertEqual(chosen["device_index"], 2)
+            missing, err = choose_camera("nope")
+            self.assertIsNone(missing)
+            self.assertIn("no camera named nope", err)
+        with patch("cctv_ui.service.discover_cameras", return_value=[]):
+            chosen, err = choose_camera(None)
+            self.assertIsNone(chosen)
+            self.assertIsNone(err)
+            write_config(chosen)
+            self.assertIn("cameras: []", config_file().read_text(encoding="utf-8"))
+
+    def test_live_host_reloads_a_camera_without_restarting(self) -> None:
+        class _Body:
+            status = 200
+
+            def __enter__(self) -> "_Body":
+                return self
+
+            def __exit__(self, *args: object) -> bool:
+                return False
+
+        with (
+            patch(
+                "cctv_ui.service.discover_cameras",
+                return_value=[{"name": "imx219", "backend": "picamera2", "device_index": 0}],
+            ),
+            patch("cctv_ui.service.running_healthy", return_value=True),
+            patch("cctv_ui.service.ensure_env", return_value={"PORT": "8000"}),
+            patch("cctv_ui.service.urlopen", return_value=_Body()) as opened,
+            patch("cctv_ui.service.subprocess.Popen") as popen,
+        ):
+            err = start_stream()
+        self.assertIsNone(err)
+        popen.assert_not_called()
+        request = opened.call_args.args[0]
+        self.assertIn("/local/cameras/reload", request.full_url)
+        self.assertIn("imx219", config_file().read_text(encoding="utf-8"))
 
     def test_ui_socket_roundtrip(self) -> None:
         server = UiServer(lambda command: "ok" if command == "camera" else "err")

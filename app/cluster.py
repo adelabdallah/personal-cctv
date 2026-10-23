@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -31,22 +32,26 @@ Peers = Callable[[], list["Claim"]]
 Publish = Callable[[], Optional[str]]
 
 
+FAILOVER_WINDOW_S = 20.0
+
+
 @dataclass(frozen=True)
 class Claim:
     base: str
     started_at: float
     takeover_at: float | None
     public_url: str | None
+    power: int = 0
 
 
 def winner(claims: list[Claim]) -> Claim | None:
     if not claims:
         return None
 
-    def rank(claim: Claim) -> tuple[int, float]:
+    def rank(claim: Claim) -> tuple[int, float, int, float]:
         if claim.takeover_at is not None:
-            return (1, claim.takeover_at)
-        return (0, -claim.started_at)
+            return (2, claim.takeover_at, claim.power, -claim.started_at)
+        return (1, 0.0, claim.power, -claim.started_at)
 
     return max(claims, key=rank)
 
@@ -57,20 +62,63 @@ def decide(
     *,
     want_takeover: bool,
     now: float,
+    power: int = 0,
 ) -> tuple[Role, Claim]:
     claims = list(peers)
     if want_takeover:
         started = self_claim.started_at if self_claim is not None else now
-        claims.append(Claim(base="", started_at=started, takeover_at=now, public_url=None))
+        claims.append(Claim(base="", started_at=started, takeover_at=now, public_url=None, power=power))
     elif self_claim is not None:
         claims.append(self_claim)
+    elif _can_challenge(peers, power, now):
+        claims.append(Claim(base="", started_at=now, takeover_at=None, public_url=None, power=power))
     if not claims:
-        return "host", Claim(base="", started_at=now, takeover_at=None, public_url=None)
+        return "host", Claim(base="", started_at=now, takeover_at=None, public_url=None, power=power)
     chosen = winner(claims)
     assert chosen is not None
     if chosen.base == "":
         return "host", chosen
     return "follower", chosen
+
+
+def _can_challenge(peers: list[Claim], power: int, now: float) -> bool:
+    """A stronger machine may replace a host that has just appeared."""
+    if not peers or any(peer.takeover_at is not None for peer in peers):
+        return False
+    if any((now - peer.started_at) >= FAILOVER_WINDOW_S for peer in peers):
+        return False
+    return power > max(peer.power for peer in peers)
+
+
+def power_rank(model: str, cpu_count: int) -> int:
+    """Higher numbers are stronger machines. A Pi 3B+ outranks a Pi Zero W."""
+    text = model.lower()
+    if "raspberry pi 5" in text:
+        return 70
+    if "raspberry pi 4" in text:
+        return 50
+    if "zero 2" in text:
+        return 25
+    if "pi zero" in text or "zero w" in text:
+        return 10
+    if "raspberry pi 3" in text and "plus" in text:
+        return 40
+    if "raspberry pi 3" in text:
+        return 30
+    if "raspberry pi" in text:
+        return 15
+    return 20 + max(cpu_count, 1)
+
+
+def machine_power() -> int:
+    model = ""
+    for path in ("/sys/firmware/devicetree/base/model", "/proc/device-tree/model"):
+        try:
+            model = Path(path).read_bytes().split(b"\x00", 1)[0].decode()
+            break
+        except OSError:
+            continue
+    return power_rank(model, os.cpu_count() or 1)
 
 
 def cluster_enabled() -> bool:
@@ -134,11 +182,15 @@ def read_host(base: str, timeout: float = 0.4) -> Claim | None:
     public = payload.get("public_url")
     if not isinstance(public, str) or not public:
         public = None
+    power = payload.get("power")
+    if isinstance(power, bool) or not isinstance(power, int):
+        power = 0
     return Claim(
         base=base,
         started_at=float(started),
         takeover_at=float(takeover) if takeover is not None else None,
         public_url=public,
+        power=power,
     )
 
 
@@ -179,7 +231,11 @@ def magic_dns() -> str | None:
 
 
 def publish_funnel(port: int) -> str | None:
-    """Turn on Funnel when this tailscale supports it, and return the viewer URL."""
+    """Turn on Funnel when this tailnet allows it, and return the viewer URL.
+
+    The Funnel command prints its refusal and then sits there, so the wait is short
+    and the frame loop does not call this directly.
+    """
     name = magic_dns()
     if not name:
         return None
@@ -187,19 +243,23 @@ def publish_funnel(port: int) -> str | None:
     binary = _tailscale()
     if binary is None:
         return None
+    if _tailscale_ok([binary, "funnel", "--bg", str(port)]):
+        return f"https://{name}"
+    return tailnet
+
+
+def _tailscale_ok(args: list[str]) -> bool:
     try:
         completed = subprocess.run(
-            [binary, "funnel", "--bg", str(port)],
+            args,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=5,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return tailnet
-    if completed.returncode != 0:
-        return tailnet
-    return f"https://{name}"
+        return False
+    return completed.returncode == 0
 
 
 def post_jpeg(
@@ -248,6 +308,7 @@ class Cluster:
         mono: Callable[[], float] | None = None,
         on_pace: Pace | None = None,
         post: Callable[..., tuple[int | None, bool | None]] | None = None,
+        power: int | None = None,
     ) -> None:
         self.port = port
         self.token = token
@@ -258,6 +319,8 @@ class Cluster:
         self._mono = mono or time.monotonic
         self._on_pace = on_pace
         self._post = post or post_jpeg
+        self._sync_publish = publish is not None
+        self.power = machine_power() if power is None else power
         self._lock = threading.Lock()
         self._step_lock = threading.Lock()
         self._stop = threading.Event()
@@ -270,6 +333,7 @@ class Cluster:
         self.want_takeover = os.environ.get("CCTV_TAKEOVER", "").strip().lower() in {"1", "true", "yes"}
         self._own_url: str | None = None
         self._published_at = 0.0
+        self._publishing = False
         self._last_post: dict[str, float] = {}
 
     def hold_host(self) -> None:
@@ -291,6 +355,7 @@ class Cluster:
                 "started_at": self.started_at,
                 "takeover_at": self.takeover_at,
                 "public_url": self.public_url,
+                "power": self.power,
             }
 
     def viewer_redirect(self) -> str | None:
@@ -330,8 +395,15 @@ class Cluster:
                     started_at=self.started_at,
                     takeover_at=self.takeover_at,
                     public_url=self.public_url,
+                    power=self.power,
                 )
-        role, claim = decide(self_claim, peers, want_takeover=want, now=self._clock())
+        role, claim = decide(
+            self_claim,
+            peers,
+            want_takeover=want,
+            now=self._clock(),
+            power=self.power,
+        )
         public = self._ensure_published()
         with self._lock:
             was_host = self.role == "host"
@@ -395,6 +467,27 @@ class Cluster:
         if self._published_at and now - self._published_at < 30:
             return self._own_url
         self._published_at = now
+        if not self._sync_publish:
+            if not self._publishing:
+                self._publishing = True
+                threading.Thread(target=self._publish_bg, name="cctv-funnel", daemon=True).start()
+            return self._own_url
+        return self._publish_sync()
+
+    def _publish_bg(self) -> None:
+        try:
+            url = self._publish()
+        except Exception:
+            logger.exception("Funnel publish failed")
+            url = None
+        with self._lock:
+            self._publishing = False
+            if url:
+                self._own_url = url
+                if self.role == "host":
+                    self.public_url = url
+
+    def _publish_sync(self) -> str | None:
         try:
             url = self._publish()
         except Exception:

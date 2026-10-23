@@ -71,8 +71,7 @@ def load_camera_configs(config_path: Path | None = None) -> list[CameraConfig]:
     path = config_path or get_settings().config_path
     data = _load_config_data(path)
 
-    cameras = data.get("cameras", [])
-    if not cameras:
-        raise ValueError(f"No cameras defined in {path}")
-
+    cameras = data.get("cameras") or []
+    if not isinstance(cameras, list):
+        raise ValueError(f"cameras in {path} must be a list")
     return [CameraConfig.model_validate(camera) for camera in cameras]

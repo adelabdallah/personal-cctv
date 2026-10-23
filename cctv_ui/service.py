@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Literal
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 VIEWER_PASSWORD = "pass123"
@@ -140,22 +140,92 @@ def ensure_env() -> dict[str, str]:
     }
 
 
-def write_config() -> None:
-    config_file().write_text(
-        (
+def discover_cameras() -> list[dict[str, object]]:
+    """Cameras this machine can open, CSI first, then USB."""
+    return [*_csi_cameras(), *_usb_cameras()]
+
+
+def choose_camera(name: str | None) -> tuple[dict[str, object] | None, str | None]:
+    """The named camera, otherwise the first one. None when the machine has no camera."""
+    found = discover_cameras()
+    if name:
+        wanted = " ".join(name.split()).casefold()
+        matches = [camera for camera in found if str(camera["name"]).casefold() == wanted]
+        if not matches:
+            available = ", ".join(str(camera["name"]) for camera in found) or "none"
+            return None, f"no camera named {name} ({available})"
+        return matches[0], None
+    if not found:
+        return None, None
+    return found[0], None
+
+
+def _csi_cameras() -> list[dict[str, object]]:
+    try:
+        from picamera2 import Picamera2
+
+        info = Picamera2.global_camera_info()
+    except Exception:
+        return []
+    cameras: list[dict[str, object]] = []
+    for row in info:
+        if not isinstance(row, dict):
+            continue
+        try:
+            index = int(row.get("Num", 0))
+        except (TypeError, ValueError):
+            index = 0
+        model = str(row.get("Model") or "Camera").strip() or "Camera"
+        cameras.append({"name": model, "backend": "picamera2", "device_index": index})
+    return cameras
+
+
+def _usb_cameras() -> list[dict[str, object]]:
+    base = Path("/sys/class/video4linux")
+    if not base.is_dir():
+        return []
+    cameras: list[dict[str, object]] = []
+    for node in sorted(base.iterdir(), key=lambda item: item.name):
+        suffix = node.name.removeprefix("video")
+        if not suffix.isdigit():
+            continue
+        driver = ""
+        try:
+            driver = (node / "device" / "driver").readlink().name
+        except OSError:
+            driver = ""
+        if driver != "uvcvideo":
+            continue
+        try:
+            label = (node / "name").read_text(encoding="utf-8").strip()
+        except OSError:
+            label = ""
+        if "metadata" in label.lower():
+            continue
+        cameras.append(
+            {"name": label or "USB camera", "backend": "opencv", "device_index": int(suffix)}
+        )
+    return cameras
+
+
+def write_config(camera: dict[str, object] | None) -> None:
+    if camera is None:
+        text = "app_name: CCTV\ncameras: []\n"
+    else:
+        name = str(camera["name"]).replace("\\", "\\\\").replace('"', '\\"')
+        text = (
             "app_name: CCTV\n"
             "cameras:\n"
             f"  - id: {CAMERA_ID}\n"
-            "    name: Camera\n"
-            "    backend: picamera2\n"
-            "    device_index: 0\n"
+            f'    name: "{name}"\n'
+            f"    backend: {camera['backend']}\n"
+            f"    device_index: {camera['device_index']}\n"
             "    width: 640\n"
             "    height: 480\n"
             "    fps: 8\n"
             "    jpeg_quality: 65\n"
-        ),
-        encoding="utf-8",
-    )
+        )
+    config_file().write_text(text, encoding="utf-8")
 
 
 def _pid_alive(pid: object) -> bool:
@@ -284,21 +354,25 @@ def _python() -> str:
     return sys.executable or shutil.which("python3") or "python3"
 
 
-def start_stream(*, restart: bool = False, takeover: bool = False) -> str | None:
+def start_stream(*, restart: bool = False, takeover: bool = False, camera: str | None = None) -> str | None:
     """Start uvicorn. The process joins the tailnet and publishes Funnel when it is host.
 
-    When the server is already healthy, leave it running. ``takeover`` asks that
-    process to become the host. ``restart`` stops the server first.
+    When the server is already healthy, leave it running and open the selected camera
+    on that process. ``takeover`` asks that process to become the host. ``restart``
+    stops the server first.
     """
     root = repo_root()
     if not (root / "app" / "main.py").is_file():
         return f"personal-cctv is not at {root}"
+    chosen, err = choose_camera(camera)
+    if err:
+        return err
     settings = ensure_env()
-    write_config()
+    write_config(chosen)
     if running_healthy() and not restart:
         if takeover:
             _request_takeover(settings["PORT"])
-        return None
+        return _reload_local_cameras(settings["PORT"])
     stop_stream()
     log = log_file().open("ab")
     env = _process_env(settings)
@@ -344,6 +418,19 @@ def _request_takeover(port: str) -> None:
         return
 
 
+def _reload_local_cameras(port: str) -> str | None:
+    request = Request(f"http://127.0.0.1:{port}/local/cameras/reload", data=b"", method="POST")
+    try:
+        with urlopen(request, timeout=3) as resp:
+            if resp.status == 200:
+                return None
+            return f"camera reload status {resp.status}"
+    except HTTPError as exc:
+        return f"camera reload status {exc.code}"
+    except (OSError, URLError, TimeoutError) as exc:
+        return f"camera reload failed ({exc})"
+
+
 def _wait_public_url(timeout: float = LINK_WAIT_S) -> str | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -370,10 +457,10 @@ def format_link() -> str:
     )
 
 
-def format_start(*, takeover: bool = False) -> tuple[int, str]:
+def format_start(*, takeover: bool = False, camera: str | None = None) -> tuple[int, str]:
     ui_command("release", timeout=6.0)
     already = running_healthy()
-    err = start_stream(takeover=takeover)
+    err = start_stream(takeover=takeover, camera=camera)
     ui_command("refresh", timeout=1.0)
     if err:
         return 1, err + "\n"

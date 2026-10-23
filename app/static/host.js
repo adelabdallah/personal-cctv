@@ -25,23 +25,38 @@
       return;
     }
     const button = event.target.closest("[data-thermal-toggle]");
-    if (!button || !stack || !stack.contains(button)) {
+    if (button && stack && stack.contains(button)) {
+      const tile = button.closest(".camera-tile");
+      const pip = tile && tile.querySelector("[data-thermal-pip]");
+      if (!tile || !pip) {
+        return;
+      }
+      const show = pip.hidden;
+      pip.hidden = !show;
+      if (!show) {
+        const previous = pip.dataset.objectUrl;
+        pip.removeAttribute("src");
+        if (previous) {
+          URL.revokeObjectURL(previous);
+          delete pip.dataset.objectUrl;
+        }
+        button.textContent = "Show thermal feed";
+      } else {
+        button.textContent = "Hide thermal feed";
+      }
       return;
     }
-    const tile = button.closest(".camera-tile");
-    const pip = tile && tile.querySelector("[data-thermal-pip]");
-    if (!tile || !pip) {
+    const frame = event.target.closest("[data-expand]");
+    if (!frame || !stack || !stack.contains(frame)) {
       return;
     }
-    const show = pip.hidden;
-    pip.hidden = !show;
-    if (show) {
-      pip.src = `/thermal/${tile.dataset.cameraId}`;
-      button.textContent = "Hide thermal feed";
-    } else {
-      pip.removeAttribute("src");
-      button.textContent = "Show thermal feed";
+    const tile = frame.closest(".camera-tile");
+    if (!tile) {
+      return;
     }
+    const open = tile.classList.toggle("is-expanded");
+    frame.setAttribute("aria-pressed", open ? "true" : "false");
+    tile.dataset.paintedAt = "0";
   });
 
   function markSlow(button, on) {
@@ -70,14 +85,19 @@
           <span class="offline-note" hidden>Offline</span>
         </div>
       </div>
-      <div class="stream-frame">
-        <img class="stream" alt="">
+      <button type="button" class="stream-frame" data-expand>
+        <img class="stream" data-stream alt="">
         <img class="thermal-pip" data-thermal-pip alt="Thermal feed" hidden>
-      </div>`;
+      </button>`;
     stack.appendChild(tile);
-    const image = tile.querySelector(".stream");
-    image.src = `/stream/${feed.id}`;
-    image.alt = `Live stream for ${feed.name}`;
+    const image = tile.querySelector("[data-stream]");
+    image.alt = `Live view for ${feed.name}`;
+    const frame = tile.querySelector(".stream-frame");
+    if (frame) {
+      frame.setAttribute("data-expand", "");
+      frame.setAttribute("aria-label", `Enlarge ${feed.name}`);
+    }
+    layout();
     return tile;
   }
 
@@ -122,6 +142,61 @@
     }
   }
 
+  function layout() {
+    if (!stack) {
+      return;
+    }
+    const count = stack.querySelectorAll(".camera-tile").length;
+    const columns = count >= 3 ? 3 : Math.max(count, 1);
+    stack.classList.toggle("is-single", count <= 1);
+    stack.style.setProperty("--feed-columns", String(columns));
+  }
+
+  async function paint(img, url) {
+    if (!img || img.dataset.busy === "1") {
+      return;
+    }
+    img.dataset.busy = "1";
+    try {
+      const response = await fetch(url, { credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+      const blob = await response.blob();
+      const next = URL.createObjectURL(blob);
+      const previous = img.dataset.objectUrl;
+      img.src = next;
+      img.dataset.objectUrl = next;
+      if (previous) {
+        URL.revokeObjectURL(previous);
+      }
+    } catch (_error) {
+      // Keep the picture already on screen.
+    } finally {
+      img.dataset.busy = "0";
+    }
+  }
+
+  function paintTiles() {
+    if (!stack) {
+      return;
+    }
+    const now = Date.now();
+    stack.querySelectorAll(".camera-tile").forEach((tile) => {
+      const wait = tile.classList.contains("is-expanded") ? 200 : 1000;
+      const last = Number(tile.dataset.paintedAt || 0);
+      if (now - last < wait) {
+        return;
+      }
+      tile.dataset.paintedAt = String(now);
+      paint(tile.querySelector("[data-stream]"), `/snapshot/${tile.dataset.cameraId}`);
+      const pip = tile.querySelector("[data-thermal-pip]");
+      if (pip && !pip.hidden) {
+        paint(pip, `/snapshot/${tile.dataset.cameraId}/thermal`);
+      }
+    });
+  }
+
   async function pollFeeds() {
     if (!stack) {
       return;
@@ -139,7 +214,10 @@
   }
 
   if (stack) {
+    layout();
+    paintTiles();
     setInterval(pollFeeds, 2000);
+    setInterval(paintTiles, 200);
   }
 
   const root = document.querySelector("[data-host-status]");

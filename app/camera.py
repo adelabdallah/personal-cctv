@@ -285,3 +285,17 @@ class CameraManager:
 
     def get(self, camera_id: str) -> Camera | None:
         return self._cameras.get(camera_id)
+
+    def replace(self, configs: list[CameraConfig]) -> None:
+        """Open the cameras in this list and stop any local camera that dropped out."""
+        wanted = {config.id: config for config in configs}
+        for camera_id, camera in list(self._cameras.items()):
+            if camera_id not in wanted or camera.config != wanted[camera_id]:
+                camera.stop()
+                del self._cameras[camera_id]
+        for config in configs:
+            if config.id in self._cameras:
+                continue
+            camera = Camera(config)
+            camera.start()
+            self._cameras[config.id] = camera

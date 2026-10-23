@@ -276,6 +276,19 @@ async def stream_camera(request: Request, camera_id: str, _: LoginRequired):
     )
 
 
+@app.get("/snapshot/{camera_id}/thermal")
+async def snapshot_thermal(request: Request, camera_id: str, _: LoginRequired):
+    manager: CameraManager = request.app.state.camera_manager
+    camera = manager.get(camera_id)
+    if camera is not None:
+        jpeg = camera.thermal_jpeg()
+    else:
+        jpeg = request.app.state.remote_feeds.thermal(camera_id)
+    if jpeg is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no thermal frame")
+    return Response(content=jpeg, media_type="image/jpeg")
+
+
 @app.get("/snapshot/{camera_id}")
 async def snapshot_camera(request: Request, camera_id: str, _: LoginRequired):
     manager: CameraManager = request.app.state.camera_manager
@@ -382,6 +395,21 @@ async def thermal_stream(request: Request, camera_id: str, _: LoginRequired):
         mjpeg_frames(lambda: remote.thermal(camera_id)),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@app.post("/local/cameras/reload")
+async def reload_local_cameras(request: Request) -> dict[str, list[dict[str, str]]]:
+    """Open whatever cameras the config file lists now. Localhost only."""
+    if not _local_client(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="local only")
+    configs = load_camera_configs(get_settings().config_path)
+    request.app.state.camera_manager.replace(configs)
+    return {
+        "cameras": [
+            {"id": camera.id, "name": camera.name}
+            for camera in request.app.state.camera_manager.list_cameras()
+        ]
+    }
 
 
 @app.get("/cameras")

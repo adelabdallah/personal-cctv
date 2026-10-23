@@ -46,14 +46,10 @@
           <span class="offline-note" {% if camera.fresh %}hidden{% endif %}>Offline</span>
         </div>
       </div>
-      <div class="stream-frame">
-        <img
-          class="stream"
-          src="/stream/{{ camera.id }}"
-          alt="Live stream for {{ camera.name }}"
-        >
+      <button type="button" class="stream-frame" data-expand aria-label="Enlarge {{ camera.name }}">
+        <img class="stream" data-stream alt="Live view for {{ camera.name }}">
         <img class="thermal-pip" data-thermal-pip alt="Thermal feed" hidden>
-      </div>
+      </button>
     </section>
     {% endfor %}
   </main>

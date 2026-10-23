@@ -89,7 +89,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000), sign in, and confirm the li
 
 Devices that stream find each other on the tailnet. The first one to start is the host. The others post JPEGs to it. A later device can take the page with `cctv start --takeover` (or Become host on the deck) so a smaller machine can hand off to a stronger one.
 
-The host turns on Tailscale Funnel. The public page is `https://<host>.<tailnet>.ts.net`. `cctv link` prints that address. A bookmark to another device that is on redirects to the current host.
+The host turns on Tailscale Funnel when the tailnet allows it. The public page is then `https://<host>.<tailnet>.ts.net`. Until Funnel is enabled in the Tailscale admin console, the link stays `http://<magicdns>:8000` on the tailnet. `cctv link` prints the address that is up. A bookmark to another device that is on redirects to the current host.
 
 Every device needs the same `CCTV_PASSWORD` and `INGEST_TOKEN`. The server listens on `0.0.0.0` so tailnet peers can post frames. The viewer password still guards the page, and the ingest token guards frame uploads.
 
@@ -134,7 +134,7 @@ On the Pi, the touchscreen UI starts on tty1 at boot. The same actions are avail
 
 | Command | What it does |
 | --- | --- |
-| `cctv start` | Start the camera server. It joins the tailnet host, or becomes the host, and publishes Tailscale Funnel |
+| `cctv start` | Start the camera server. It joins the tailnet host, or becomes the host. With no camera connected it still starts. `--camera NAME` picks one camera when several are connected. Running it again on a live host opens that camera without giving up the host. |
 | `cctv start --takeover` | Become the host when another device is already hosting |
 | `cctv camera` | Show the camera on the panel |
 | `cctv reboot` | Restart the Pi |

@@ -14,7 +14,7 @@ os.environ["INGEST_TOKEN"] = "test-token"
 os.environ["CCTV_CLUSTER"] = "0"
 
 from app.camera import Camera
-from app.cluster import Claim, Cluster, decide
+from app.cluster import Claim, Cluster, decide, power_rank
 from app.config import CameraConfig, get_settings
 from app.feeds import RemoteFeeds, fresh
 
@@ -99,6 +99,42 @@ class ElectionTests(unittest.TestCase):
         self.assertEqual(role, "host")
         self.assertEqual(claim.started_at, 5)
 
+    def test_stronger_machine_replaces_a_host_that_just_started(self) -> None:
+        clock = {"now": 100}
+        peer = Claim(
+            "http://10.0.0.2:8000",
+            started_at=95,
+            takeover_at=None,
+            public_url="https://weak.example",
+            power=10,
+        )
+        cluster = self._cluster([peer], clock)
+        cluster.power = 40
+        cluster.step()
+        self.assertEqual(cluster.role, "host")
+
+    def test_stable_weaker_host_keeps_the_page(self) -> None:
+        clock = {"now": 100}
+        peer = Claim(
+            "http://10.0.0.2:8000",
+            started_at=50,
+            takeover_at=None,
+            public_url="https://weak.example",
+            power=10,
+        )
+        cluster = self._cluster([peer], clock)
+        cluster.power = 40
+        cluster.step()
+        self.assertEqual(cluster.role, "follower")
+        self.assertEqual(cluster.upstream, "http://10.0.0.2:8000")
+
+    def test_pi_3b_plus_outranks_a_pi_zero_w(self) -> None:
+        plus = power_rank("Raspberry Pi 3 Model B Plus Rev 1.3", 4)
+        zero = power_rank("Raspberry Pi Zero W Rev 1.1", 1)
+        four = power_rank("Raspberry Pi 4 Model B Rev 1.5", 4)
+        self.assertGreater(plus, zero)
+        self.assertGreater(four, plus)
+
 
 class IngestTests(unittest.TestCase):
     def test_posted_jpeg_and_thermal_show_on_that_tile(self) -> None:
@@ -163,6 +199,8 @@ class IngestTests(unittest.TestCase):
                 door = page.text.split('data-camera-id="door"', 1)[1].split("</section>", 1)[0]
                 yard_html = page.text.split('data-camera-id="yard"', 1)[1].split("</section>", 1)[0]
                 self.assertIn("Porch", door)
+                self.assertIn("data-expand", door)
+                self.assertNotIn('src="/stream/', page.text)
                 self.assertIn("data-thermal-toggle", door)
                 self.assertNotIn("data-thermal-toggle hidden", door)
                 self.assertIn("data-thermal-toggle hidden", yard_html)
@@ -177,6 +215,36 @@ class IngestTests(unittest.TestCase):
                 self.assertIn(JPEG, chunk)
                 missing = client.get("/thermal/yard")
                 self.assertEqual(missing.status_code, 404)
+
+    def test_reload_opens_a_camera_on_a_running_host(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.camera import Camera
+        from app.main import app
+
+        with tempfile.TemporaryDirectory() as raw:
+            config = _config(Path(raw))
+            with (
+                patch.dict(os.environ, {"CONFIG_PATH": str(config)}),
+                patch.object(Camera, "start"),
+                patch.object(Camera, "stop"),
+            ):
+                get_settings.cache_clear()
+                with TestClient(app, client=("203.0.113.8", 9)) as remote:
+                    self.assertEqual(remote.post("/local/cameras/reload").status_code, 403)
+                with TestClient(app, client=("127.0.0.1", 9)) as local:
+                    config.write_text(
+                        "cameras:\n  - id: porch\n    name: Porch\n    device_index: 1\n",
+                        encoding="utf-8",
+                    )
+                    reloaded = local.post("/local/cameras/reload")
+                    self.assertEqual(reloaded.status_code, 200)
+                    self.assertEqual(reloaded.json()["cameras"][0]["id"], "porch")
+                    local.post("/login", data={"password": "test-password"})
+                    feeds = {row["id"]: row for row in local.get("/status").json()["feeds"]}
+                    self.assertIn("porch", feeds)
+                    self.assertNotIn("local-cam", feeds)
+                get_settings.cache_clear()
 
 
 class SlowTests(unittest.TestCase):
