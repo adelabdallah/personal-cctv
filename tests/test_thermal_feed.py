@@ -137,10 +137,52 @@ class ThermalFeedTests(unittest.TestCase):
                 calls.append(args)
                 return capture
 
-        with patch.dict("sys.modules", {"cv2": _Cv2()}):
+        with patch("sys.platform", "linux"), patch.dict("sys.modules", {"cv2": _Cv2()}):
             camera._open_opencv()
         self.assertEqual(calls, [("/dev/video10", 200)])
         self.assertEqual([prop for prop, _value in capture.props], [3, 4])
+
+    def test_opencv_opens_a_mac_camera_with_avfoundation(self) -> None:
+        camera = Camera(
+            CameraConfig(
+                id="air",
+                name="MacBook",
+                backend="opencv",
+                device_index=0,
+                width=640,
+                height=480,
+                fps=8,
+            )
+        )
+        calls: list[tuple[object, ...]] = []
+
+        class _Capture:
+            def isOpened(self) -> bool:
+                return True
+
+            def release(self) -> None:
+                return None
+
+            def set(self, prop: int, value: float) -> bool:
+                return True
+
+            def get(self, prop: int) -> float:
+                return 0.0
+
+        class _Cv2:
+            CAP_AVFOUNDATION = 1200
+            CAP_PROP_FRAME_WIDTH = 3
+            CAP_PROP_FRAME_HEIGHT = 4
+            CAP_PROP_FPS = 5
+
+            @staticmethod
+            def VideoCapture(*args: object) -> _Capture:
+                calls.append(args)
+                return _Capture()
+
+        with patch("sys.platform", "darwin"), patch.dict("sys.modules", {"cv2": _Cv2()}):
+            camera._open_opencv()
+        self.assertEqual(calls, [(0, 1200)])
 
     def test_local_post_and_viewer_button(self) -> None:
         from fastapi.testclient import TestClient

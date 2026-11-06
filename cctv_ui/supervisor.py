@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
-from cctv_ui.service import format_start, power_action, public_url, running_healthy, state_dir
+from cctv_ui.service import (
+    format_start,
+    power_action,
+    public_url,
+    running_healthy,
+    state_dir,
+    stream_should_run,
+)
 
 Action = Literal["ok", "wait", "repair", "reboot", "hold"]
 REPAIR_SCRIPT = "/usr/local/sbin/cctv-repair-network"
@@ -182,7 +189,7 @@ def collect_snapshot(config: Config) -> Snapshot:
         ping_gateway_ok=_ping(gateway) if config.check_ping_gateway and gateway else gateway is not None,
         ping_public_ok=_ping(config.ping_public) if config.check_ping_public else True,
         tailscale_ok=_tailscale_running() if config.check_tailscale else True,
-        stream_ok=running_healthy(timeout=1.0) if config.check_stream else True,
+        stream_ok=running_healthy(timeout=1.0) if config.check_stream and stream_should_run() else True,
         tunnel_ok=public_url() is not None if config.check_tunnel else True,
     )
 

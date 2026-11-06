@@ -87,9 +87,13 @@ def cmd_ui() -> int:
 
 
 def cmd_boot() -> int:
+    from cctv_ui.service import stream_should_run
     from cctv_ui.supervisor import wait_for_route
 
     wait_for_route()
+    if not stream_should_run():
+        print("stream stays off until a camera is selected")
+        return 0
     return cmd_start(False)
 
 

@@ -52,8 +52,16 @@ EOF
 chmod 755 "${BIN}/cctv"
 need_sudo ln -sfn "${BIN}/cctv" /usr/local/bin/cctv
 
-echo "== pitft and menu service =="
+echo "== pitft, menu, and health check =="
 need_sudo install -m 755 "${REPO_ROOT}/scripts/claim-pitft-display.sh" /usr/local/sbin/claim-pitft-display.sh
+need_sudo install -m 755 "${REPO_ROOT}/scripts/cctv-repair-network.sh" /usr/local/sbin/cctv-repair-network
+need_sudo install -d /etc/systemd/system.conf.d
+need_sudo install -m 644 "${REPO_ROOT}/scripts/systemd/cctv-zero-watchdog.conf" /etc/systemd/system.conf.d/cctv-watchdog.conf
+for unit in cctv-stream.service cctv-supervisor.service cctv-supervisor.timer; do
+  unit_src="${REPO_ROOT}/scripts/systemd/${unit}"
+  sed -e "s/@USER@/${TARGET_USER}/g" -e "s|@HOME@|${TARGET_HOME}|g" "${unit_src}" \
+    | need_sudo tee "/etc/systemd/system/${unit}" >/dev/null
+done
 sed -e "s/@USER@/${TARGET_USER}/g" \
   -e "s|@HOME@|${TARGET_HOME}|g" \
   -e "s|@ROOT@|${REPO_ROOT}|g" \
@@ -63,7 +71,7 @@ sed -e "s/@USER@/${TARGET_USER}/g" \
 systemctl="$(command -v systemctl)"
 tmp="$(mktemp)"
 cat > "${tmp}" <<EOF
-${TARGET_USER} ALL=(root) NOPASSWD: ${systemctl} reboot, ${systemctl} poweroff, /usr/local/sbin/claim-pitft-display.sh
+${TARGET_USER} ALL=(root) NOPASSWD: ${systemctl} reboot, ${systemctl} poweroff, /usr/local/sbin/claim-pitft-display.sh, /usr/local/sbin/cctv-repair-network
 EOF
 need_sudo install -m 440 "${tmp}" /etc/sudoers.d/cctv-zero-power
 rm -f "${tmp}"
@@ -81,10 +89,34 @@ need_sudo systemctl disable --now todo-ui@"${TARGET_USER}".service 2>/dev/null |
 need_sudo rm -f /usr/local/bin/todo /usr/local/bin/todo-ui /etc/systemd/system/todo-ui@.service
 need_sudo rm -rf /opt/todo-gadget
 
+mkdir -p "${TARGET_HOME}/.local/share/cctv"
+if [[ ! -f "${TARGET_HOME}/.local/share/cctv/supervisor.conf" ]]; then
+  cat > "${TARGET_HOME}/.local/share/cctv/supervisor.conf" <<'EOF'
+# Times are seconds. The Zero does not own the public tunnel.
+
+boot_grace_s=180
+failure_window_s=300
+repair_wait_s=90
+max_reboots_per_hour=6
+
+check_route=yes
+check_ping_gateway=yes
+check_ping_public=yes
+check_tailscale=yes
+check_stream=yes
+check_tunnel=no
+
+ping_public=1.1.1.1
+interface=wlan0
+EOF
+fi
+
 need_sudo systemctl daemon-reload
 need_sudo systemctl enable --now cctv-zero-ui.service
+need_sudo systemctl enable --now cctv-stream.service cctv-supervisor.timer
 
 echo
-echo "menu installed. the stream stays off until you pick a camera."
+echo "menu installed. a selected camera comes back after a crash or reboot."
+echo "a check every 30 seconds repairs Wi-Fi, Tailscale, or the stream."
 echo "viewer password is pass123."
 echo "slow mode is the one-frame-a-second switch on the viewer page."

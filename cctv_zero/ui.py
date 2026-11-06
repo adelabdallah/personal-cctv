@@ -138,8 +138,9 @@ class App:
     def _run_effect(self, effect: str) -> None:
         if effect == "stop":
             self._start_gen += 1
-            from cctv_ui.service import stop_stream
+            from cctv_ui.service import mark_stream_wanted, stop_stream
 
+            mark_stream_wanted(False)
             stop_stream()
             return
         if effect == "poweroff":
@@ -201,7 +202,23 @@ class App:
         self._phase_at = now
         with self._lock:
             phase = self.menu.phase
-        if phase != "running" or is_running():
+        running = is_running()
+        if phase == "running" and running:
+            return
+        if phase == "idle" and running:
+            with self._lock:
+                if self.menu.phase != "idle":
+                    return
+                self.menu = Menu(
+                    page=self.menu.page,
+                    selected=self.menu.selected,
+                    phase="running",
+                    cameras=self.menu.cameras,
+                    notice=self.menu.notice,
+                )
+                self._dirty = True
+            return
+        if phase != "running" or running:
             return
         with self._lock:
             if self.menu.phase != "running":

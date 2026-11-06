@@ -89,6 +89,8 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000), sign in, and confirm the li
 
 Devices that stream find each other on the tailnet. The first one to start is the host. The others post JPEGs to it. A later device can take the page with `cctv start --takeover` (or Become host on the deck) so a smaller machine can hand off to a stronger one.
 
+A Mac opens its camera through AVFoundation and takes the host role when the server starts. `run.sh` keeps that Mac from idle sleep for as long as the server runs. Closing the lid still sleeps the machine. Set `CCTV_TAKEOVER=0` to stay a follower.
+
 The host turns on Tailscale Funnel when the tailnet allows it. The public page is then `https://<host>.<tailnet>.ts.net`. Until Funnel is enabled in the Tailscale admin console, the link stays `http://<magicdns>:8000` on the tailnet. `cctv link` prints the address that is up. A bookmark to another device that is on redirects to the current host.
 
 Every device needs the same `CCTV_PASSWORD` and `INGEST_TOKEN`. The server listens on `0.0.0.0` so tailnet peers can post frames. The viewer password still guards the page, and the ingest token guards frame uploads.
@@ -155,7 +157,7 @@ The touch controller needs I2C. The installer enables it and will tell you if a 
 
 ## Pi Zero W node
 
-The original Pi Zero W uses the PiTFT buttons instead of the touchscreen. Install from a checkout on that board. This does not start a stream at boot, and it does not install the deck's reboot watchdog.
+The original Pi Zero W uses the PiTFT buttons instead of the touchscreen. Install from a checkout on that board. The stream stays off until a camera is selected. After that, boot starts it again, and Stop leaves it off.
 
 ```bash
 ./scripts/install-zero.sh
@@ -164,6 +166,8 @@ The original Pi Zero W uses the PiTFT buttons instead of the touchscreen. Instal
 The menu is CCTV, Debug, and Power off. CCTV lists USB cameras. Picking one starts the stream and returns to the menu with `CCTV (running)`. Open CCTV again to switch cameras or stop. Debug shows SSH sessions, whether the internet ping succeeded, and a log of button presses. The backlight turns off after 2 minutes without a button press. The next press turns it back on and leaves the menu where it was.
 
 A webcam that already emits MJPEG is copied at 640x480 and 5 frames a second. A webcam without MJPEG is encoded at 320x240 and 2 frames a second. A CSI camera is listed by its sensor name and streams at 640x480 and 5 frames a second. Slow mode stays the viewer-page switch, and it drops that camera to one JPEG a second. While another tailnet machine is hosting, this Zero posts frames to it. If nothing stronger is hosting, this Zero serves the page.
+
+A check every 30 seconds repairs Wi-Fi, Tailscale, or the stream when one of them stays down, and reboots the Zero if the repair does not hold. Thresholds are in `~/.local/share/cctv/supervisor.conf`. The hardware watchdog waits 60 seconds and takes effect on the next reboot after install.
 
 The viewer password is `pass123`.
 

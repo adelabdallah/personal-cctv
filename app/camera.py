@@ -5,6 +5,7 @@ import logging
 import os
 import select
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Generator
@@ -345,11 +346,15 @@ class Camera:
         import cv2
 
         index = self.config.device_index
-        api = getattr(cv2, "CAP_V4L2", 200)
-        capture = cv2.VideoCapture(f"/dev/video{index}", api)
-        if not capture.isOpened():
-            capture.release()
+        if sys.platform == "darwin":
+            api = getattr(cv2, "CAP_AVFOUNDATION", 1200)
             capture = cv2.VideoCapture(index, api)
+        else:
+            api = getattr(cv2, "CAP_V4L2", 200)
+            capture = cv2.VideoCapture(f"/dev/video{index}", api)
+            if not capture.isOpened():
+                capture.release()
+                capture = cv2.VideoCapture(index, api)
         if not capture.isOpened():
             capture.release()
             raise RuntimeError(

@@ -19,4 +19,7 @@ HOST=$(grep -E '^HOST=' .env | cut -d= -f2- || echo "0.0.0.0")
 PORT=$(grep -E '^PORT=' .env | cut -d= -f2- || echo "8000")
 
 echo "Starting CCTV server on http://${HOST}:${PORT}"
+if [[ "$(uname -s)" == "Darwin" ]] && command -v caffeinate >/dev/null 2>&1; then
+  exec caffeinate -i uvicorn app.main:app --host "$HOST" --port "$PORT"
+fi
 exec uvicorn app.main:app --host "$HOST" --port "$PORT"

@@ -11,7 +11,16 @@ from unittest.mock import patch
 from app.camera import Camera, take_jpeg, v4l2_command
 from app.config import CameraConfig, load_camera_configs
 from cctv_ui.cli import main
-from cctv_ui.service import _csi_from_sysfs, config_file, is_original_zero_w, node_camera_id, write_config
+from cctv_ui.service import (
+    _csi_from_sysfs,
+    config_file,
+    is_original_zero_w,
+    mark_stream_wanted,
+    node_camera_id,
+    stream_should_run,
+    wanted_path,
+    write_config,
+)
 from cctv_zero.backlight import idle_blank
 from cctv_zero.debug import facts_line, ssh_sessions
 from cctv_zero.menu import Menu, home_label, press, rows
@@ -158,6 +167,22 @@ class ProfileTest(unittest.TestCase):
         text = config_file().read_text(encoding="utf-8")
         self.assertIn("id: zero", text)
         self.assertNotIn("id: camera", text)
+
+    def test_a_selected_zero_camera_comes_back_and_stop_keeps_it_off(self) -> None:
+        with patch("cctv_ui.service.read_model", return_value="Raspberry Pi Zero W Rev 1.1"):
+            self.assertFalse(stream_should_run())
+            config_file().write_text(
+                "cameras:\n  - id: zero\n    name: imx219\n    device_index: 0\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(stream_should_run())
+            mark_stream_wanted(False)
+            self.assertFalse(stream_should_run())
+            mark_stream_wanted(True)
+            self.assertTrue(stream_should_run())
+        wanted_path().unlink()
+        with patch("cctv_ui.service.read_model", return_value="Raspberry Pi 4 Model B"):
+            self.assertTrue(stream_should_run())
 
 
 class MenuTest(unittest.TestCase):

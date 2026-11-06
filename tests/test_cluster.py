@@ -14,7 +14,7 @@ os.environ["INGEST_TOKEN"] = "test-token"
 os.environ["CCTV_CLUSTER"] = "0"
 
 from app.camera import Camera
-from app.cluster import Claim, Cluster, decide, power_rank
+from app.cluster import Claim, Cluster, decide, power_rank, takeover_on_start
 from app.config import CameraConfig, get_settings
 from app.feeds import RemoteFeeds, fresh
 
@@ -127,6 +127,33 @@ class ElectionTests(unittest.TestCase):
         cluster.step()
         self.assertEqual(cluster.role, "follower")
         self.assertEqual(cluster.upstream, "http://10.0.0.2:8000")
+
+    def test_a_mac_takes_the_host_when_its_server_starts(self) -> None:
+        peer = Claim(
+            "http://10.0.0.8:8000",
+            started_at=50,
+            takeover_at=None,
+            public_url="https://old.example",
+            power=40,
+        )
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CCTV_TAKEOVER", None)
+            with patch("app.cluster.sys.platform", "linux"):
+                self.assertFalse(takeover_on_start())
+            with patch("app.cluster.sys.platform", "darwin"):
+                self.assertTrue(takeover_on_start())
+                cluster = Cluster(
+                    port=8000,
+                    token=TOKEN,
+                    frames=lambda: [],
+                    peers=lambda: [peer],
+                    publish=lambda: "https://me.example",
+                    clock=lambda: 100,
+                )
+        self.assertTrue(cluster.want_takeover)
+        cluster.step()
+        self.assertEqual(cluster.role, "host")
+        self.assertEqual(cluster.takeover_at, 100)
 
     def test_pi_3b_plus_outranks_a_pi_zero_w(self) -> None:
         plus = power_rank("Raspberry Pi 3 Model B Plus Rev 1.3", 4)

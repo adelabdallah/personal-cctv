@@ -11,6 +11,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -123,6 +124,14 @@ def machine_power() -> int:
 
 def cluster_enabled() -> bool:
     return os.environ.get("CCTV_CLUSTER", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def takeover_on_start() -> bool:
+    """A Mac takes the page when its server starts. CCTV_TAKEOVER overrides that."""
+    raw = os.environ.get("CCTV_TAKEOVER")
+    if raw is not None and raw.strip() != "":
+        return raw.strip().lower() in {"1", "true", "yes"}
+    return sys.platform == "darwin"
 
 
 def _tailscale() -> str | None:
@@ -330,7 +339,7 @@ class Cluster:
         self.takeover_at: float | None = None
         self.public_url: str | None = None
         self.upstream: str | None = None
-        self.want_takeover = os.environ.get("CCTV_TAKEOVER", "").strip().lower() in {"1", "true", "yes"}
+        self.want_takeover = takeover_on_start()
         self._own_url: str | None = None
         self._published_at = 0.0
         self._publishing = False

@@ -60,6 +60,40 @@ def log_file() -> Path:
     return state_dir() / "cctv.log"
 
 
+def wanted_path() -> Path:
+    return state_dir() / "stream-wanted"
+
+
+def mark_stream_wanted(wanted: bool) -> None:
+    wanted_path().write_text("yes\n" if wanted else "no\n", encoding="utf-8")
+
+
+def stream_should_run() -> bool:
+    """Whether a down stream should be started again.
+
+    Stop on the Zero writes "no". A selected camera, including one left in
+    the config by a crash, stays on. Other boards start at boot.
+    """
+    path = wanted_path()
+    if path.is_file():
+        return path.read_text(encoding="utf-8").strip().lower() in {"1", "yes", "true", "on"}
+    if is_original_zero_w(read_model()):
+        return _config_has_camera()
+    return True
+
+
+def _config_has_camera() -> bool:
+    path = config_file()
+    if not path.is_file():
+        return False
+    try:
+        from app.config import load_camera_configs
+
+        return bool(load_camera_configs(path))
+    except (OSError, ValueError):
+        return False
+
+
 def ui_socket_path() -> Path:
     return state_dir() / "ui.sock"
 
@@ -485,6 +519,7 @@ def start_stream(*, restart: bool = False, takeover: bool = False, camera: str |
     chosen, err = choose_camera(camera)
     if err:
         return err
+    mark_stream_wanted(True)
     settings = ensure_env()
     write_config(chosen)
     if running_healthy() and not restart:
