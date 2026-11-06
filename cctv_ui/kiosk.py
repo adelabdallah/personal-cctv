@@ -58,7 +58,7 @@ GAP = 8
 TEMP_PATH = Path("/sys/class/thermal/thermal_zone0/temp")
 TEMP_PERIOD_S = 2.0
 STATUS_PERIOD_S = 0.5
-BLANK_AFTER_S = 10 * 60
+BLANK_AFTER_S = 5 * 60
 
 
 @dataclass

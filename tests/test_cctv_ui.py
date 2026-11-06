@@ -190,16 +190,16 @@ class MappingTest(unittest.TestCase):
             for other in rects[index + 1 :]:
                 self.assertFalse(_overlaps(rect, other))
 
-    def test_backlight_blanks_after_ten_minutes_and_wakes(self) -> None:
-        self.assertEqual(BLANK_AFTER_S, 600)
+    def test_backlight_blanks_after_five_minutes_and_wakes(self) -> None:
+        self.assertEqual(BLANK_AFTER_S, 300)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "brightness"
             path.write_text("1\n", encoding="utf-8")
             state = UiState(last_input=0.0)
-            _maybe_blank(state, 599, path)
+            _maybe_blank(state, 299, path)
             self.assertFalse(state.blanked)
             self.assertEqual(path.read_text(encoding="utf-8"), "1\n")
-            _maybe_blank(state, 600, path)
+            _maybe_blank(state, 300, path)
             self.assertTrue(state.blanked)
             self.assertEqual(path.read_text(encoding="utf-8"), "0\n")
             self.assertTrue(_mark_input(state, 601, path))

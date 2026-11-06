@@ -141,7 +141,7 @@ On the Pi, the touchscreen UI starts on tty1 at boot. The same actions are avail
 | `cctv shutdown` | Shut the Pi down |
 | `cctv link` | Print the public stream URL |
 
-The viewer password is `pass123`. On the panel, keys `1` to `4` match the four tiles, and Esc goes back. The backlight turns off after 10 minutes without a touch or key. The next touch or key turns it back on and does not activate a tile.
+The viewer password is `pass123`. On the panel, keys `1` to `4` match the four tiles, and Esc goes back. The backlight turns off after 5 minutes without a touch or key. The next touch or key turns it back on and does not activate a tile.
 
 After boot finishes and a default route exists, the Pi runs `cctv start` on its own. A check every 30 seconds repairs Wi-Fi, Tailscale, or the stream when one of them stays down, and reboots the Pi if the repair does not hold. Thresholds and which checks count are in `~/.local/share/cctv/supervisor.conf`, created the first time the check runs. The hardware watchdog also resets the Pi if the system itself locks up. That part takes effect on the next reboot after install.
 
