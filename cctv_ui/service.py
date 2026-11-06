@@ -506,6 +506,14 @@ def _python() -> str:
     return sys.executable or shutil.which("python3") or "python3"
 
 
+def _behind_network() -> None:
+    """Keep Wi-Fi and Tailscale ahead of the camera on the single-core Zero."""
+    try:
+        os.nice(10)
+    except OSError:
+        return
+
+
 def start_stream(*, restart: bool = False, takeover: bool = False, camera: str | None = None) -> str | None:
     """Start uvicorn. The process joins the tailnet and publishes Funnel when it is host.
 
@@ -531,23 +539,25 @@ def start_stream(*, restart: bool = False, takeover: bool = False, camera: str |
     env = _process_env(settings)
     env["CCTV_TAKEOVER"] = "1" if takeover else "0"
     env["CCTV_CLUSTER"] = "1"
+    command = [
+        _python(),
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        settings["PORT"],
+    ]
     try:
         app = subprocess.Popen(
-            [
-                _python(),
-                "-m",
-                "uvicorn",
-                "app.main:app",
-                "--host",
-                "0.0.0.0",
-                "--port",
-                settings["PORT"],
-            ],
+            command,
             cwd=str(root),
             env=env,
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            preexec_fn=_behind_network if is_original_zero_w(read_model()) else None,
         )
     except OSError as exc:
         log.close()

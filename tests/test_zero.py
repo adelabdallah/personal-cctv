@@ -17,6 +17,7 @@ from cctv_ui.service import (
     is_original_zero_w,
     mark_stream_wanted,
     node_camera_id,
+    start_stream,
     stream_should_run,
     wanted_path,
     write_config,
@@ -205,6 +206,39 @@ class ProfileTest(unittest.TestCase):
             self.assertEqual(cmd_boot(), 0)
         start.assert_not_called()
         mark.assert_called_once_with(False)
+
+    def test_zero_stream_runs_behind_wifi_and_tailscale(self) -> None:
+        camera = {"name": "imx219", "backend": "picamera2", "device_index": 0}
+        with (
+            patch("cctv_ui.service.read_model", return_value="Raspberry Pi Zero W Rev 1.1"),
+            patch("cctv_ui.service.choose_camera", return_value=(camera, None)),
+            patch("cctv_ui.service.running_healthy", return_value=False),
+            patch("cctv_ui.service.stop_stream"),
+            patch("cctv_ui.service.ensure_env", return_value={"PORT": "8000"}),
+            patch("cctv_ui.service._wait_health", return_value=None),
+            patch("cctv_ui.service._wait_public_url", return_value=None),
+            patch("cctv_ui.service.subprocess.Popen") as popen,
+            patch("cctv_ui.service.os.nice") as nice,
+        ):
+            popen.return_value.pid = 1
+            self.assertIsNone(start_stream())
+            preexec = popen.call_args.kwargs["preexec_fn"]
+            preexec()
+            nice.assert_called_once_with(10)
+
+        with (
+            patch("cctv_ui.service.read_model", return_value="Raspberry Pi 4 Model B"),
+            patch("cctv_ui.service.choose_camera", return_value=(camera, None)),
+            patch("cctv_ui.service.running_healthy", return_value=False),
+            patch("cctv_ui.service.stop_stream"),
+            patch("cctv_ui.service.ensure_env", return_value={"PORT": "8000"}),
+            patch("cctv_ui.service._wait_health", return_value=None),
+            patch("cctv_ui.service._wait_public_url", return_value=None),
+            patch("cctv_ui.service.subprocess.Popen") as popen,
+        ):
+            popen.return_value.pid = 1
+            self.assertIsNone(start_stream())
+        self.assertIsNone(popen.call_args.kwargs["preexec_fn"])
 
 
 class MenuTest(unittest.TestCase):
