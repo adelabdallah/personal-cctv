@@ -99,13 +99,15 @@ def start_picamera2(size: tuple[int, int], camera_num: int = 0, fps: int | None 
     identity. Identity turns this upside-down mount the right way up, and
     the normal exposure constraint keeps the room's colour. fps asks the
     sensor for that rate. Leave it unset and the module keeps its own pace.
+    The main stream is YUV420 so the camera's JPEG encoder can take it.
+    RGB888 would be converted on the CPU.
     """
     from libcamera import Transform, controls
     from picamera2 import Picamera2
 
     cam = Picamera2(camera_num=camera_num)
     config = cam.create_preview_configuration(
-        main={"size": size, "format": "RGB888"},
+        main={"size": size, "format": "YUV420"},
         transform=Transform(),
     )
     cam.configure(config)
@@ -437,6 +439,7 @@ class Camera:
 
     def _capture_loop(self) -> None:
         while not self._stop_event.is_set():
+            started = time.monotonic()
             try:
                 self._open()
                 if self.config.backend == "v4l2":
@@ -452,8 +455,10 @@ class Camera:
                 self._close()
                 time.sleep(1)
                 continue
-            if self.config.backend == "picamera2" and self.slow:
-                time.sleep(self.frame_interval())
+            if self.config.backend == "picamera2":
+                remaining = self.frame_interval() - (time.monotonic() - started)
+                if remaining > 0:
+                    time.sleep(remaining)
             elif self.config.backend not in {"v4l2", "picamera2"}:
                 time.sleep(self.frame_interval())
 

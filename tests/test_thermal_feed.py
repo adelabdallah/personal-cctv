@@ -73,6 +73,78 @@ class ThermalFeedTests(unittest.TestCase):
             camera._open_picamera2()
         start.assert_called_once_with((640, 480), camera_num=2, fps=12)
 
+    def test_picamera2_stream_is_yuv420_for_the_hardware_jpeg_encoder(self) -> None:
+        from app.camera import start_picamera2
+
+        seen: dict[str, object] = {}
+
+        class _Enum:
+            Auto = "auto"
+            Normal = "normal"
+
+        class _Controls:
+            AwbModeEnum = _Enum
+            AeConstraintModeEnum = _Enum
+
+        class _Picamera2:
+            def __init__(self, camera_num: int = 0) -> None:
+                seen["camera_num"] = camera_num
+
+            def create_preview_configuration(self, main: dict, transform: object) -> dict:
+                seen["main"] = main
+                return {"main": main}
+
+            def configure(self, config: dict) -> None:
+                seen["configured"] = config
+
+            def set_controls(self, sensor: dict) -> None:
+                seen["controls"] = sensor
+
+            def start(self) -> None:
+                seen["started"] = True
+
+        libcamera = type(
+            "Libcamera",
+            (),
+            {"Transform": lambda: object(), "controls": _Controls},
+        )
+        picamera2 = type("Picamera2Mod", (), {"Picamera2": _Picamera2})
+        with patch.dict("sys.modules", {"libcamera": libcamera, "picamera2": picamera2}):
+            started = start_picamera2((640, 480), camera_num=0, fps=5)
+        self.assertIsInstance(started, _Picamera2)
+        self.assertEqual(seen["main"], {"size": (640, 480), "format": "YUV420"})
+        self.assertEqual(seen["controls"]["FrameRate"], 5.0)
+        self.assertTrue(seen["started"])
+
+    def test_picamera2_capture_waits_out_the_remainder_of_the_interval(self) -> None:
+        camera = Camera(
+            CameraConfig(
+                id="zero",
+                name="imx219",
+                backend="picamera2",
+                width=640,
+                height=480,
+                fps=5,
+            )
+        )
+        clock = {"now": 10.0}
+
+        def monotonic() -> float:
+            return clock["now"]
+
+        def sleep(seconds: float) -> None:
+            clock["now"] += seconds
+            camera._stop_event.set()
+
+        with (
+            patch.object(camera, "_open"),
+            patch.object(camera, "_grab_picamera2"),
+            patch("app.camera.time.monotonic", monotonic),
+            patch("app.camera.time.sleep", sleep),
+        ):
+            camera._capture_loop()
+        self.assertAlmostEqual(clock["now"], 10.2)
+
     def test_encode_jpeg_passes_bgr_to_simplejpeg(self) -> None:
         from app.camera import encode_jpeg
 
