@@ -1,0 +1,26 @@
+[Unit]
+Description=CCTV menu on the PiTFT
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+SupplementaryGroups=gpio spi video
+WorkingDirectory=@ROOT@
+Environment=HOME=@HOME@
+Environment=PYTHONPATH=@ROOT@
+ExecStartPre=+/usr/local/sbin/claim-pitft-display.sh
+ExecStart=/usr/bin/python3 -m cctv_zero
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+TTYPath=
+TTYReset=no
+TTYVHangup=no
+TTYVTDisallocate=no
+
+[Install]
+WantedBy=multi-user.target

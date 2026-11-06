@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import io
 import logging
+import os
+import select
+import subprocess
 import threading
 import time
 from collections.abc import Generator
@@ -12,12 +15,89 @@ from app.feeds import SLOW_S
 logger = logging.getLogger(__name__)
 
 
-def start_picamera2(size: tuple[int, int], camera_num: int = 0):
+def device_offers_mjpeg(device_index: int) -> bool:
+    """True when the USB camera can hand us JPEG frames."""
+    try:
+        completed = subprocess.run(
+            ["v4l2-ctl", "-d", f"/dev/video{device_index}", "--list-formats"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    text = f"{completed.stdout}\n{completed.stderr}".upper()
+    return "MJPG" in text or "MJPEG" in text
+
+
+def v4l2_command(
+    device: str,
+    width: int,
+    height: int,
+    fps: int,
+    *,
+    mjpeg_copy: bool,
+    jpeg_quality: int,
+) -> list[str]:
+    """ffmpeg argv that writes one MJPEG stream to stdout."""
+    rate = str(max(int(fps), 1))
+    # ffmpeg's q:v runs 2 (clear) to 31 (small). JPEG quality runs the other way.
+    qscale = str(max(2, min(31, round((100 - jpeg_quality) * 29 / 99) + 2)))
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-fflags",
+        "nobuffer",
+        "-f",
+        "v4l2",
+    ]
+    if mjpeg_copy:
+        command.extend(["-input_format", "mjpeg"])
+    command.extend(
+        [
+            "-video_size",
+            f"{int(width)}x{int(height)}",
+            "-framerate",
+            rate,
+            "-i",
+            device,
+        ]
+    )
+    if mjpeg_copy:
+        command.extend(["-c:v", "copy"])
+    else:
+        command.extend(["-vf", f"fps={rate}", "-q:v", qscale])
+    command.extend(["-f", "mjpeg", "pipe:1"])
+    return command
+
+
+def take_jpeg(buf: bytearray) -> bytes | None:
+    """Pull one JPEG out of a byte stream. Leave a partial frame in buf."""
+    start = buf.find(b"\xff\xd8")
+    if start < 0:
+        if len(buf) > 1:
+            del buf[:-1]
+        return None
+    if start:
+        del buf[:start]
+    end = buf.find(b"\xff\xd9", 2)
+    if end < 0:
+        return None
+    frame = bytes(buf[: end + 2])
+    del buf[: end + 2]
+    return frame
+
+
+def start_picamera2(size: tuple[int, int], camera_num: int = 0, fps: int | None = None):
     """Open the Pi camera module upright, with normal auto exposure.
 
     Official modules rotate the sensor 180 degrees unless the transform is
     identity. Identity turns this upside-down mount the right way up, and
-    the normal exposure constraint keeps the room's colour.
+    the normal exposure constraint keeps the room's colour. fps asks the
+    sensor for that rate. Leave it unset and the module keeps its own pace.
     """
     from libcamera import Transform, controls
     from picamera2 import Picamera2
@@ -28,14 +108,15 @@ def start_picamera2(size: tuple[int, int], camera_num: int = 0):
         transform=Transform(),
     )
     cam.configure(config)
-    cam.set_controls(
-        {
-            "AeEnable": True,
-            "AwbEnable": True,
-            "AwbMode": controls.AwbModeEnum.Auto,
-            "AeConstraintMode": controls.AeConstraintModeEnum.Normal,
-        }
-    )
+    sensor = {
+        "AeEnable": True,
+        "AwbEnable": True,
+        "AwbMode": controls.AwbModeEnum.Auto,
+        "AeConstraintMode": controls.AeConstraintModeEnum.Normal,
+    }
+    if fps is not None:
+        sensor["FrameRate"] = float(max(fps, 1))
+    cam.set_controls(sensor)
     cam.start()
     return cam
 
@@ -67,6 +148,9 @@ class Camera:
         self.config = config
         self._capture = None
         self._picam = None
+        self._ffmpeg: subprocess.Popen[bytes] | None = None
+        self._jpeg_buf = bytearray()
+        self._v4l2_fps: int | None = None
         self._latest_jpeg: bytes | None = None
         self._arrived_at = 0.0
         self._thermal: bytes | None = None
@@ -149,7 +233,18 @@ class Camera:
                 )
             time.sleep(self.frame_interval())
 
+    def _v4l2_target_fps(self) -> int:
+        if self.slow:
+            return 1
+        return max(int(self.config.fps), 1)
+
     def _open(self) -> None:
+        if self.config.backend == "v4l2":
+            target = self._v4l2_target_fps()
+            if self._ffmpeg is None or self._v4l2_fps != target or self._ffmpeg.poll() is not None:
+                self._close_ffmpeg()
+                self._open_v4l2(target)
+            return
         if self.config.backend == "picamera2":
             if self._picam is None:
                 self._open_picamera2()
@@ -158,6 +253,7 @@ class Camera:
             self._open_opencv()
 
     def _close(self) -> None:
+        self._close_ffmpeg()
         if self._capture is not None:
             self._capture.release()
             self._capture = None
@@ -171,6 +267,79 @@ class Camera:
             except Exception:
                 pass
             self._picam = None
+
+    def _close_ffmpeg(self) -> None:
+        proc = self._ffmpeg
+        self._ffmpeg = None
+        self._v4l2_fps = None
+        self._jpeg_buf.clear()
+        if proc is None:
+            return
+        if proc.stdout is not None:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+
+    def _open_v4l2(self, fps: int) -> None:
+        device = f"/dev/video{self.config.device_index}"
+        command = v4l2_command(
+            device,
+            self.config.width,
+            self.config.height,
+            fps,
+            mjpeg_copy=self.config.mjpeg_copy,
+            jpeg_quality=self.config.jpeg_quality,
+        )
+        self._jpeg_buf.clear()
+        self._ffmpeg = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        self._v4l2_fps = fps
+        self.actual_width = self.config.width
+        self.actual_height = self.config.height
+        self.actual_fps = float(fps)
+        logger.info("Camera '%s' opened via v4l2: %s", self.config.id, " ".join(command))
+
+    def _read_v4l2_jpeg(self) -> bytes:
+        proc = self._ffmpeg
+        if proc is None or proc.stdout is None:
+            raise RuntimeError("ffmpeg is not running")
+        fd = proc.stdout.fileno()
+        while not self._stop_event.is_set():
+            if proc.poll() is not None and not self._jpeg_buf:
+                raise RuntimeError(f"ffmpeg exited ({proc.returncode})")
+            ready, _, _ = select.select([fd], [], [], 0.4)
+            if not ready:
+                continue
+            try:
+                chunk = os.read(fd, 8192)
+            except OSError as exc:
+                raise RuntimeError("ffmpeg read failed") from exc
+            if not chunk:
+                raise RuntimeError("ffmpeg closed the picture stream")
+            self._jpeg_buf.extend(chunk)
+            frame = take_jpeg(self._jpeg_buf)
+            if frame:
+                return frame
+        raise RuntimeError("camera stopped")
+
+    def _grab_v4l2(self) -> None:
+        self._store_jpeg(self._read_v4l2_jpeg())
 
     def _open_opencv(self):
         import cv2
@@ -211,6 +380,7 @@ class Camera:
         self._picam = start_picamera2(
             (self.config.width, self.config.height),
             camera_num=self.config.device_index,
+            fps=self.config.fps,
         )
         self.actual_width = self.config.width
         self.actual_height = self.config.height
@@ -264,16 +434,23 @@ class Camera:
         while not self._stop_event.is_set():
             try:
                 self._open()
-                if self.config.backend == "picamera2":
+                if self.config.backend == "v4l2":
+                    self._grab_v4l2()
+                elif self.config.backend == "picamera2":
                     self._grab_picamera2()
                 else:
                     self._grab_opencv()
             except Exception:
+                if self._stop_event.is_set():
+                    break
                 logger.exception("Camera '%s' capture loop error", self.config.id)
                 self._close()
                 time.sleep(1)
                 continue
-            time.sleep(self.frame_interval())
+            if self.config.backend == "picamera2" and self.slow:
+                time.sleep(self.frame_interval())
+            elif self.config.backend not in {"v4l2", "picamera2"}:
+                time.sleep(self.frame_interval())
 
 
 class CameraManager:

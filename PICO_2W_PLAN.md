@@ -31,5 +31,5 @@ Today each camera is a local device the server opens, `opencv` or `picamera2`, a
 ## Out of scope
 
 - Recording, motion detection, and audio
-- Treating this board as the Pi Zero 2 W CSI camera in [PI_ZERO_2_CCTV_PLAN.md](PI_ZERO_2_CCTV_PLAN.md)
+- Treating the Pico as the Pi Zero camera node
 - Pushing the Pico past about one frame a second

@@ -71,7 +71,7 @@ class ThermalFeedTests(unittest.TestCase):
         )
         with patch("app.camera.start_picamera2", return_value=object()) as start:
             camera._open_picamera2()
-        start.assert_called_once_with((640, 480), camera_num=2)
+        start.assert_called_once_with((640, 480), camera_num=2, fps=12)
 
     def test_encode_jpeg_passes_bgr_to_simplejpeg(self) -> None:
         from app.camera import encode_jpeg

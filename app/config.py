@@ -16,13 +16,15 @@ DEFAULT_APP_NAME = "Personal CCTV"
 class CameraConfig(BaseModel):
     id: str
     name: str
-    backend: Literal["opencv", "picamera2"] = "opencv"
+    backend: Literal["opencv", "picamera2", "v4l2"] = "opencv"
     device_index: int = 0
     width: int = 854
     height: int = 480
     fps: int = 12
     jpeg_quality: int = Field(default=70, ge=1, le=100)
     slow: bool = False
+    # v4l2 only. True copies the webcam's own MJPEG. False asks ffmpeg to encode.
+    mjpeg_copy: bool = False
 
 
 class Settings(BaseSettings):

@@ -77,8 +77,12 @@ def cmd_link() -> int:
 
 
 def cmd_ui() -> int:
-    from cctv_ui.kiosk import run
+    from cctv_ui.service import is_original_zero_w, read_model
 
+    if is_original_zero_w(read_model()):
+        from cctv_zero.ui import run
+    else:
+        from cctv_ui.kiosk import run
     return run()
 
 

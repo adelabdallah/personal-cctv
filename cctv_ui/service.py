@@ -19,7 +19,8 @@ from urllib.request import Request, urlopen
 VIEWER_PASSWORD = "pass123"
 DEFAULT_PORT = 8000
 CAMERA_ID = "camera"
-START_WAIT_S = 25.0
+# A cold import of picamera2 on a Zero W can take more than a minute.
+START_WAIT_S = 180.0
 LINK_WAIT_S = 20.0
 DEFAULT_INGEST_TOKEN = "cctv-ingest"
 PowerAction = Literal["reboot", "poweroff"]
@@ -160,23 +161,39 @@ def choose_camera(name: str | None) -> tuple[dict[str, object] | None, str | Non
     return found[0], None
 
 
-def _csi_cameras() -> list[dict[str, object]]:
-    try:
-        from picamera2 import Picamera2
+def node_camera_id() -> str:
+    """An id that will not collide with another machine's local camera."""
+    host = socket.gethostname().split(".")[0].lower()
+    cleaned = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in host).strip("-_")[:64]
+    if cleaned[:1].isalnum():
+        return cleaned
+    return CAMERA_ID
 
-        info = Picamera2.global_camera_info()
-    except Exception:
+
+def _csi_cameras() -> list[dict[str, object]]:
+    """CSI sensors named by the kernel.
+
+    Reading sysfs does not open the sensor. Picamera2 would keep it open in
+    the menu process, and the stream could not start.
+    """
+    return _csi_from_sysfs(Path("/sys/bus/i2c/devices"))
+
+
+def _csi_from_sysfs(base: Path) -> list[dict[str, object]]:
+    if not base.is_dir():
         return []
     cameras: list[dict[str, object]] = []
-    for row in info:
-        if not isinstance(row, dict):
+    for node in sorted(path for path in base.iterdir() if path.is_dir()):
+        # Sensor nodes look like 10-0010. Adapters are i2c-0, i2c-11, and so on.
+        if not node.name[:1].isdigit() or "-" not in node.name:
             continue
         try:
-            index = int(row.get("Num", 0))
-        except (TypeError, ValueError):
-            index = 0
-        model = str(row.get("Model") or "Camera").strip() or "Camera"
-        cameras.append({"name": model, "backend": "picamera2", "device_index": index})
+            model = (node / "name").read_text(encoding="utf-8").strip("\x00").strip()
+        except OSError:
+            continue
+        if not model or any(ch.isspace() for ch in model):
+            continue
+        cameras.append({"name": model, "backend": "picamera2", "device_index": len(cameras)})
     return cameras
 
 
@@ -208,22 +225,114 @@ def _usb_cameras() -> list[dict[str, object]]:
     return cameras
 
 
+def read_model() -> str:
+    for path in ("/sys/firmware/devicetree/base/model", "/proc/device-tree/model"):
+        try:
+            return Path(path).read_bytes().split(b"\x00", 1)[0].decode()
+        except OSError:
+            continue
+    return ""
+
+
+def is_original_zero_w(model: str) -> bool:
+    """The single-core Zero W. A Zero 2 W keeps the usual camera profile."""
+    text = model.lower()
+    return "zero" in text and "2" not in text
+
+
+def zero_usb_profile(camera: dict[str, object]) -> dict[str, object]:
+    """USB capture settings for this machine.
+
+    The original Zero W copies MJPEG at 640x480 and 5 fps. A webcam with no
+    MJPEG mode is encoded at 320x240 and 2 fps. Other machines stay on the
+    OpenCV profile write_config already uses.
+    """
+    if camera.get("backend") != "opencv":
+        return camera
+    if not is_original_zero_w(read_model()):
+        return camera
+    from app.camera import device_offers_mjpeg
+
+    profile = dict(camera)
+    profile["backend"] = "v4l2"
+    profile["jpeg_quality"] = 65
+    profile["slow"] = False
+    raw_index = profile["device_index"]
+    if isinstance(raw_index, bool) or not isinstance(raw_index, int):
+        raise TypeError("device_index must be an integer")
+    index = raw_index
+    if device_offers_mjpeg(index):
+        profile["width"] = 640
+        profile["height"] = 480
+        profile["fps"] = 5
+        profile["mjpeg_copy"] = True
+    else:
+        profile["width"] = 320
+        profile["height"] = 240
+        profile["fps"] = 2
+        profile["mjpeg_copy"] = False
+    return profile
+
+
+def zero_csi_profile(camera: dict[str, object]) -> dict[str, object]:
+    """CSI capture on the original Zero W is 640x480 at 5 fps."""
+    if camera.get("backend") != "picamera2":
+        return camera
+    if not is_original_zero_w(read_model()):
+        return camera
+    profile = dict(camera)
+    profile["width"] = 640
+    profile["height"] = 480
+    profile["fps"] = 5
+    profile["jpeg_quality"] = 65
+    profile["slow"] = False
+    return profile
+
+
 def write_config(camera: dict[str, object] | None) -> None:
     if camera is None:
         text = "app_name: CCTV\ncameras: []\n"
     else:
+        camera = zero_csi_profile(zero_usb_profile(camera))
         name = str(camera["name"]).replace("\\", "\\\\").replace('"', '\\"')
+        if camera.get("backend") == "v4l2":
+            width = camera["width"]
+            height = camera["height"]
+            fps = camera["fps"]
+            quality = camera.get("jpeg_quality", 65)
+            if not all(isinstance(value, int) for value in (width, height, fps, quality)):
+                raise TypeError("v4l2 profile sizes must be integers")
+            picture = (
+                f"    width: {width}\n"
+                f"    height: {height}\n"
+                f"    fps: {fps}\n"
+                f"    jpeg_quality: {quality}\n"
+                f"    slow: {'true' if camera.get('slow') else 'false'}\n"
+                f"    mjpeg_copy: {'true' if camera.get('mjpeg_copy') else 'false'}\n"
+            )
+        elif camera.get("backend") == "picamera2" and isinstance(camera.get("fps"), int):
+            picture = (
+                f"    width: {camera['width']}\n"
+                f"    height: {camera['height']}\n"
+                f"    fps: {camera['fps']}\n"
+                f"    jpeg_quality: {camera['jpeg_quality']}\n"
+                f"    slow: {'true' if camera.get('slow') else 'false'}\n"
+            )
+        else:
+            picture = (
+                "    width: 640\n"
+                "    height: 480\n"
+                "    fps: 8\n"
+                "    jpeg_quality: 65\n"
+            )
         text = (
             "app_name: CCTV\n"
             "cameras:\n"
-            f"  - id: {CAMERA_ID}\n"
+            f"  - id: {node_camera_id()}\n"
             f'    name: "{name}"\n'
             f"    backend: {camera['backend']}\n"
             f"    device_index: {camera['device_index']}\n"
-            "    width: 640\n"
-            "    height: 480\n"
-            "    fps: 8\n"
-            "    jpeg_quality: 65\n"
+            f"{picture}"
         )
     config_file().write_text(text, encoding="utf-8")
 
@@ -276,7 +385,16 @@ def running_healthy(timeout: float = 0.4) -> bool:
 
 
 def preview_url() -> str:
-    return f"http://127.0.0.1:{stream_port()}/preview/{CAMERA_ID}"
+    camera_id = node_camera_id()
+    try:
+        from app.config import load_camera_configs
+
+        loaded = load_camera_configs(config_file())
+    except (OSError, ValueError):
+        loaded = []
+    if loaded:
+        camera_id = loaded[0].id
+    return f"http://127.0.0.1:{stream_port()}/preview/{camera_id}"
 
 
 def _kill_tree(pid: int) -> None:

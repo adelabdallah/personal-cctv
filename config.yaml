@@ -4,7 +4,7 @@
 cameras:
   - id: front-door
     name: Front Door
-    # backend: opencv (USB / macOS) or picamera2 (Raspberry Pi CSI)
+    # backend: opencv (USB / macOS), picamera2 (Raspberry Pi CSI), or v4l2 (Pi Zero USB)
     device_index: 0
     width: 854
     height: 480
