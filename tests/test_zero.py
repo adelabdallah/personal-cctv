@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from app.camera import Camera, take_jpeg, v4l2_command
 from app.config import CameraConfig, load_camera_configs
-from cctv_ui.cli import main
+from cctv_ui.cli import cmd_boot, main
 from cctv_ui.service import (
     _csi_from_sysfs,
     config_file,
@@ -183,6 +183,28 @@ class ProfileTest(unittest.TestCase):
         wanted_path().unlink()
         with patch("cctv_ui.service.read_model", return_value="Raspberry Pi 4 Model B"):
             self.assertTrue(stream_should_run())
+
+    def test_zero_boot_starts_the_first_camera_or_stays_on_the_menu(self) -> None:
+        imx = {"name": "imx219", "backend": "picamera2", "device_index": 0}
+        with (
+            patch("cctv_ui.service.read_model", return_value="Raspberry Pi Zero W Rev 1.1"),
+            patch("cctv_ui.supervisor.wait_for_route", return_value=True),
+            patch("cctv_ui.service.choose_camera", return_value=(imx, None)),
+            patch("cctv_ui.cli.cmd_start", return_value=0) as start,
+        ):
+            self.assertEqual(cmd_boot(), 0)
+        start.assert_called_once_with(False, "imx219")
+
+        with (
+            patch("cctv_ui.service.read_model", return_value="Raspberry Pi Zero W Rev 1.1"),
+            patch("cctv_ui.supervisor.wait_for_route", return_value=True),
+            patch("cctv_ui.service.choose_camera", return_value=(None, None)),
+            patch("cctv_ui.service.mark_stream_wanted") as mark,
+            patch("cctv_ui.cli.cmd_start", return_value=0) as start,
+        ):
+            self.assertEqual(cmd_boot(), 0)
+        start.assert_not_called()
+        mark.assert_called_once_with(False)
 
 
 class MenuTest(unittest.TestCase):
