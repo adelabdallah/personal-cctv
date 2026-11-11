@@ -40,6 +40,52 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+REPO_ORIGIN = "git@github.com:adelabdallah/personal-cctv.git"
+
+
+def pull_latest() -> None:
+    """Move this checkout to origin/main. Keep the current tree if the fetch fails."""
+    root = repo_root()
+    git = shutil.which("git")
+    if git is None:
+        print("git is not installed, keeping the current tree")
+        return
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+
+    def run(*args: str, timeout: float = 30) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [git, "-C", str(root), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+
+    if not (root / ".git").exists():
+        print("preparing checkout")
+        if run("init").returncode != 0:
+            print("could not prepare the checkout, keeping the current tree")
+            return
+    remotes = run("remote")
+    if remotes.returncode != 0 or "origin" not in remotes.stdout.split():
+        added = run("remote", "add", "origin", REPO_ORIGIN)
+        if added.returncode != 0:
+            print("could not set origin, keeping the current tree")
+            return
+    fetched = run("fetch", "origin", "main", timeout=90)
+    if fetched.returncode != 0:
+        print("could not fetch origin/main, keeping the current tree")
+        return
+    updated = run("checkout", "-f", "-B", "main", "origin/main")
+    if updated.returncode != 0:
+        print("could not update to origin/main, keeping the current tree")
+        return
+    print("updated to origin/main")
+
+
 def url_file() -> Path:
     return state_dir() / "cctv-url"
 

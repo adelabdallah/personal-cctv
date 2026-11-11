@@ -14,7 +14,7 @@ ExecStart=/usr/local/bin/cctv boot
 RemainAfterExit=yes
 Restart=on-failure
 RestartSec=20
-TimeoutStartSec=300
+TimeoutStartSec=420
 
 [Install]
 WantedBy=multi-user.target

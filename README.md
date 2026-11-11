@@ -157,7 +157,7 @@ The touch controller needs I2C. The installer enables it and will tell you if a 
 
 ## Pi Zero W node
 
-The original Pi Zero W uses the PiTFT buttons instead of the touchscreen. Install from a checkout on that board. Boot starts the first connected camera. With no camera connected, the menu stays up and the stream stays off. Stop leaves the stream off until the next boot.
+The original Pi Zero W uses the PiTFT buttons instead of the touchscreen. Install from a checkout on that board. Boot fetches origin/main, then starts the first connected camera. If the fetch fails, it starts with the code already on the board. With no camera connected, the menu stays up and the stream stays off. Stop leaves the stream off until the next boot.
 
 ```bash
 ./scripts/install-zero.sh

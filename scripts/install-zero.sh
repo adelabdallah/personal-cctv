@@ -23,6 +23,7 @@ need_sudo apt-get update
 need_sudo apt-get install -y \
   ffmpeg \
   fbset \
+  git \
   python3-fastapi \
   python3-uvicorn \
   python3-pydantic-settings \

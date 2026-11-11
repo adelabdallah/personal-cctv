@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ from cctv_ui.service import (
     is_original_zero_w,
     mark_stream_wanted,
     node_camera_id,
+    pull_latest,
     start_stream,
     stream_should_run,
     wanted_path,
@@ -190,22 +192,50 @@ class ProfileTest(unittest.TestCase):
         with (
             patch("cctv_ui.service.read_model", return_value="Raspberry Pi Zero W Rev 1.1"),
             patch("cctv_ui.supervisor.wait_for_route", return_value=True),
+            patch("cctv_ui.service.pull_latest") as pull,
             patch("cctv_ui.service.choose_camera", return_value=(imx, None)),
             patch("cctv_ui.cli.cmd_start", return_value=0) as start,
         ):
             self.assertEqual(cmd_boot(), 0)
+        pull.assert_called_once_with()
         start.assert_called_once_with(False, "imx219")
 
         with (
             patch("cctv_ui.service.read_model", return_value="Raspberry Pi Zero W Rev 1.1"),
             patch("cctv_ui.supervisor.wait_for_route", return_value=True),
+            patch("cctv_ui.service.pull_latest") as pull,
             patch("cctv_ui.service.choose_camera", return_value=(None, None)),
             patch("cctv_ui.service.mark_stream_wanted") as mark,
             patch("cctv_ui.cli.cmd_start", return_value=0) as start,
         ):
             self.assertEqual(cmd_boot(), 0)
+        pull.assert_called_once_with()
         start.assert_not_called()
         mark.assert_called_once_with(False)
+
+    def test_boot_fetch_updates_a_new_tree_and_keeps_it_when_fetch_fails(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def run(argv: list[str], **kwargs: object) -> object:
+            calls.append(tuple(argv[3:]))
+            name = argv[3]
+            if name == "remote":
+                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            if name == "fetch":
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="denied")
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        with (
+            tempfile.TemporaryDirectory() as raw,
+            patch.dict(os.environ, {"CCTV_ROOT": raw}),
+            patch("cctv_ui.service.shutil.which", return_value="/usr/bin/git"),
+            patch("cctv_ui.service.subprocess.run", side_effect=run),
+        ):
+            pull_latest()
+        self.assertIn(("init",), calls)
+        self.assertIn(("remote", "add", "origin", "git@github.com:adelabdallah/personal-cctv.git"), calls)
+        self.assertIn(("fetch", "origin", "main"), calls)
+        self.assertFalse(any(call[:1] == ("checkout",) for call in calls))
 
     def test_zero_stream_runs_behind_wifi_and_tailscale(self) -> None:
         camera = {"name": "imx219", "backend": "picamera2", "device_index": 0}

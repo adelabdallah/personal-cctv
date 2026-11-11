@@ -87,11 +87,19 @@ def cmd_ui() -> int:
 
 
 def cmd_boot() -> int:
-    from cctv_ui.service import choose_camera, is_original_zero_w, mark_stream_wanted, read_model, stream_should_run
+    from cctv_ui.service import (
+        choose_camera,
+        is_original_zero_w,
+        mark_stream_wanted,
+        pull_latest,
+        read_model,
+        stream_should_run,
+    )
     from cctv_ui.supervisor import wait_for_route
 
     wait_for_route()
     if is_original_zero_w(read_model()):
+        pull_latest()
         chosen, err = choose_camera(None)
         if err or chosen is None:
             mark_stream_wanted(False)
